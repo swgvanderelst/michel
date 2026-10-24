@@ -74,5 +74,5 @@ test('sw.js: offline serves the cached page; first visit offline fails; modules 
   h.fetchImpl = async () => ({ ok: true, v: 'NEW-JS', clone() { return this; } });
   assert.equal(await ask('https://x.github.io/app.js'), 'OLD-JS'); // even online: cache-first, updates arrive with the VERSION bump
   assert.equal(await ask('https://x.github.io/logic.js'), 'NEW-JS'); // a module missing from the cache is fetched
-  assert.match(src, /michel-v3/);
+  assert.match(src, /michel-v4/);
 });

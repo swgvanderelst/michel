@@ -2,7 +2,7 @@
 // Navigations / index.html: network with a 2.5 s timeout, then the cached copy (the fetch keeps refreshing the cache).
 // Same-origin js/css modules: cache-first from the generation filled at install, so index and modules never mix.
 // Everything else (icons, fonts, pinned SDK): cache-first.
-const VERSION = 'michel-v3';
+const VERSION = 'michel-v4';
 const NAV_TIMEOUT_MS = self.MICHEL_NAV_TIMEOUT_MS || 2500; // slow network: serve the cached shell after this long
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'logic.js', 'store.js', 'store-dev.js', 'store-firebase.js', 'firebase-config.js',
   'vendor/qrcode.js', 'manifest.webmanifest', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'assets/splash.jpg'];
@@ -13,7 +13,7 @@ const CACHED_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 self.addEventListener('install', e => {
   e.waitUntil((async () => {
     const c = await caches.open(VERSION);
-    await Promise.all(SHELL.map(u => c.add(u).catch(() => {})));
+    await c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' }))); // bypass the HTTP cache; fail install on a missing shell file
     await Promise.all(PRECACHE_EXTERNAL.map(u => c.add(new Request(u, { mode: 'cors' })).catch(() => {})));
     await self.skipWaiting();
   })());
