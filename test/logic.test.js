@@ -484,3 +484,50 @@ test('planWindow: planning in the morning for a 22:00 entry gives the upcoming w
   // guard: the cutoff may not lie before the start
   assert.equal(L.planWindow({ entry: '10:00', end: '11:00', beforeH: 3, now: new Date(2026, 8, 10, 10, 30).getTime() }), null);
 });
+
+function inAmsterdam(fn) { const tz = process.env.TZ; process.env.TZ = 'Europe/Amsterdam'; try { fn(); } finally { if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz; } }
+
+test('DST autumn night (25 Oct 2026, 03:00 CEST -> 02:00 CET): backfill picks the right instant of the repeated hour', () => {
+  inAmsterdam(() => {
+    const U = Date.UTC;
+    assert.equal(new Date(U(2026, 9, 25, 1, 30)).getHours(), 2); // sanity: 01:30 UTC is 02:30 CET (TZ is really Amsterdam)
+    // 03:10 CET: "02:30" is 40 minutes ago (02:30 CET), not 100 (02:30 CEST)
+    const now = U(2026, 9, 25, 2, 10);
+    assert.equal(L.parseBackfillTime('02:30', now), U(2026, 9, 25, 1, 30));
+    assert.equal(now - L.parseBackfillTime('02:30', now), 40 * 60000);
+    // 02:20 CEST, before the change: "02:10" is 10 minutes ago; the later 02:10 CET is still in the future
+    const before = U(2026, 9, 25, 0, 20);
+    assert.equal(before - L.parseBackfillTime('02:10', before), 10 * 60000);
+    // retime of a dose in the repeated hour picks the closest instant that is not in the future
+    assert.equal(L.retime('02:30', U(2026, 9, 25, 1, 50), now), U(2026, 9, 25, 1, 30));
+    assert.equal(L.retime('02:30', U(2026, 9, 25, 0, 40), now), U(2026, 9, 25, 0, 30)); // the original was CEST: stays CEST
+    assert.equal(L.retime('02:50', U(2026, 9, 25, 1, 0), U(2026, 9, 25, 1, 5)), U(2026, 9, 25, 0, 50)); // 02:50 CET is still in the future, so the earlier 02:50 CEST wins
+    assert.equal(L.localCandidates('02:30', now).filter(t => t >= U(2026, 9, 25, 0, 0) && t < U(2026, 9, 25, 2, 0)).length, 2); // both occurrences exist
+  });
+});
+
+test('DST: plan end in the repeated hour, spring-forward gap, pre-entry dose', () => {
+  inAmsterdam(() => {
+    const U = Date.UTC;
+    // end 02:30 on the autumn night: the first 02:30 after the start (CEST), cutoff 2 h earlier in elapsed time
+    const w = L.planWindow({ entry: '22:00', end: '02:30', beforeH: 2, now: U(2026, 9, 24, 21, 0) });
+    assert.equal(w.start, U(2026, 9, 24, 20, 0)); // 22:00 CEST
+    assert.equal(w.end, U(2026, 9, 25, 0, 30)); // 02:30 CEST
+    assert.equal(w.cutoff, U(2026, 9, 24, 22, 30));
+    // spring forward 29 Mar 2026: 02:30 does not exist -> the next valid instant (03:30 CEST), never a silent wrong one
+    const noon = U(2026, 2, 29, 10, 0); // 12:00 CEST
+    assert.equal(L.parseBackfillTime('02:30', noon), U(2026, 2, 29, 1, 30));
+    assert.equal(new Date(L.parseBackfillTime('02:30', noon)).getHours(), 3);
+    assert.equal(L.resolveLocalTime('02:30', U(2026, 2, 28, 12, 0), 'firstAfter'), U(2026, 2, 29, 1, 30));
+    // a dose just before the entry time still belongs to that evening's window; a night dose belongs to the evening before
+    const now = new Date(2026, 8, 10, 20, 0).getTime();
+    const pre = L.planWindow({ entry: '13:00', end: '07:00', beforeH: 2, now, firstDose: new Date(2026, 8, 10, 12, 0).getTime() });
+    assert.equal(pre.start, new Date(2026, 8, 10, 13, 0).getTime());
+    assert.equal(pre.end, new Date(2026, 8, 11, 7, 0).getTime());
+    const night = L.planWindow({ entry: '13:00', end: '07:00', beforeH: 2, now, firstDose: new Date(2026, 8, 11, 3, 0).getTime() });
+    assert.equal(night.start, new Date(2026, 8, 10, 13, 0).getTime());
+    assert.equal(L.resolveLocalTime('xx', now), null);
+    assert.deepEqual(L.localCandidates('25:00', now), []);
+    assert.equal(L.resolveLocalTime('10:00', now, 'firstAfter') > now, true);
+  });
+});

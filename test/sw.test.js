@@ -54,7 +54,7 @@ test('sw.js: the page and the modules come from the same cache generation, witho
   assert.equal(await ask('https://x.github.io/app.js'), 'OLD-JS');
   assert.equal(await ask('https://x.github.io/icon-192.png'), 'CACHED-ICON');
   assert.equal(h.calls, 0, 'nothing may be refreshed into the active generation (that would mix new HTML with old JS)');
-  assert.match(src, /michel-v16/);
+  assert.match(src, /michel-v17/);
 });
 
 test('sw.js: first visit goes to the network and caches only successful responses; offline first visit fails', async () => {

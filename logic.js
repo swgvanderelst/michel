@@ -108,17 +108,36 @@ export function newId(rand = null, len = 12) {
   return s;
 }
 
+// ---- local wall-clock times, DST-safe ----
+// All instants on the days around ref whose LOCAL time is HH:MM. The repeated hour of the autumn change gives two, a time that does not
+// exist (spring forward) gives the next valid instant instead of a silent wrong one.
+export function localCandidates(hhmm, refMs) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm ?? '').trim());
+  if (!m || +m[1] > 23 || +m[2] > 59) return [];
+  const h = +m[1], mi = +m[2], out = new Set();
+  for (const k of [-1, 0, 1]) {
+    const d = new Date(refMs); d.setDate(d.getDate() + k); d.setHours(h, mi, 0, 0);
+    const base = d.getTime();
+    let found = false;
+    for (let i = -6; i <= 6; i++) { // +-3 h in 30 min steps: catches both occurrences of a repeated hour
+      const t = base + i * 1800000, x = new Date(t);
+      if (x.getHours() === h && x.getMinutes() === mi) { out.add(t); found = true; }
+    }
+    if (!found) out.add(base); // spring-forward gap: the engine already moved it to the next valid instant
+  }
+  return [...out].sort((a, b) => a - b);
+}
+// mode 'latestBefore': latest instant <= refMs (backfill, plan entry); 'firstAfter': first instant > refMs (plan end). null if none/invalid.
+export function resolveLocalTime(hhmm, refMs, mode = 'latestBefore') {
+  const c = localCandidates(hhmm, refMs);
+  if (mode === 'firstAfter') return c.find(t => t > refMs) ?? null;
+  const before = c.filter(t => t <= refMs);
+  return before.length ? before[before.length - 1] : null;
+}
+
 // "HH:MM" -> timestamp today; a time later than now means yesterday
 export function parseBackfillTime(str, now = Date.now()) {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(str).trim());
-  if (!m) return null;
-  const h = +m[1], mi = +m[2];
-  if (h > 23 || mi > 59) return null;
-  const d = new Date(now);
-  d.setHours(h, mi, 0, 0);
-  let t = d.getTime();
-  if (t > now) { d.setDate(d.getDate() - 1); t = d.getTime(); }
-  return t;
+  return resolveLocalTime(String(str).trim(), now, 'latestBefore'); // the latest instant <= now (a time later than now means yesterday)
 }
 export const minutesAgo = (min, now = Date.now()) => now - min * 60000;
 
@@ -142,8 +161,8 @@ export const myFriendId = (party, uid) => (party && Object.keys(party.claims).fi
 export function retime(str, origT, now = Date.now()) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(str).trim());
   if (!m || +m[1] > 23 || +m[2] > 59) return null;
-  // HH:MM on the day before, of and after the original date; the one that is not in the future and closest to the original wins
-  const cands = [-1, 0, 1].map(k => { const d = new Date(origT); d.setDate(d.getDate() + k); d.setHours(+m[1], +m[2], 0, 0); return d.getTime(); }).filter(t => t <= now);
+  // every instant with that wall time around the original date; not in the future, closest to the original wins
+  const cands = localCandidates(String(str).trim(), origT).filter(t => t <= now);
   if (!cands.length) return -1;
   const best = cands.reduce((x, y) => (Math.abs(y - origT) < Math.abs(x - origT) ? y : x));
   return Math.abs(best - origT) > 12 * 3600000 ? -1 : best; // -1: that time is in the future (it would jump about -24 h)
@@ -222,19 +241,15 @@ const total_ = ds => ds.reduce((a, d) => a + d.size, 0);
 
 /** "HH:MM" entry/end + hours before the end -> {start, end, cutoff} as timestamps (end may lie after midnight); null when invalid. */
 export function planWindow({ entry, end, beforeH = 2, now, firstDose = null }) {
-  const parse = s => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s ?? '').trim()); return m && +m[1] < 24 && +m[2] < 60 ? [+m[1], +m[2]] : null; };
+  const parse = x => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(x ?? '').trim()); return m && +m[1] < 24 && +m[2] < 60 ? String(x).trim() : null; };
   const e = parse(entry), n = parse(end);
   if (!e || !n) return null;
-  const at = (hm, ref, plusDays = 0) => { const d = new Date(ref); d.setDate(d.getDate() + plusDays); d.setHours(hm[0], hm[1], 0, 0); return d.getTime(); };
-  const latestOnOrBefore = (hm, ref) => { const t = at(hm, ref); return t > ref ? at(hm, ref, -1) : t; }; // latest occurrence of HH:MM that is <= ref
-  // start: with own doses the entry occurrence on/before the first dose (closest to it); otherwise the latest one <= now + 3 h
-  let start = latestOnOrBefore(e, firstDose ?? now + 3 * 3600000);
-  let endT = at(n, start);
-  if (endT <= start) endT = at(n, start, 1); // the first end occurrence after the start (across midnight)
+  // start: the latest entry instant <= first own dose + 3 h (so a dose just before the entry still counts for that evening), else <= now + 3 h
+  let start = resolveLocalTime(e, (firstDose ?? now) + 3 * 3600000, 'latestBefore');
+  let endT = resolveLocalTime(n, start, 'firstAfter'); // the first end instant after the start
   if (firstDose == null && endT <= now) { // no doses yet and that party is over: the upcoming window
-    start = at(e, start, 1);
-    endT = at(n, start);
-    if (endT <= start) endT = at(n, start, 1);
+    start = resolveLocalTime(e, start, 'firstAfter');
+    endT = resolveLocalTime(n, start, 'firstAfter');
   }
   const cutoff = endT - beforeH * 3600000;
   if (endT - start > 24 * 3600000 || cutoff < start) return null; // not a sane window
