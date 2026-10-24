@@ -83,11 +83,14 @@ export function newToken(len = 12, rand = n => globalThis.crypto.getRandomValues
   return out;
 }
 // token from a pasted link ("...?p=TOKEN") or a bare token; '' when there is none
-export function tokenFromLink(text) {
-  const t = String(text ?? '').trim();
-  let p = '';
-  try { p = new URL(t).searchParams.get('p') || ''; } catch { /* not a URL */ }
-  if (!p) { const m = /[?&]p=([A-Za-z0-9]+)/.exec(t); p = m ? m[1] : t; }
+export function tokenFromLink(text, app = null) {
+  let u;
+  try { u = new URL(String(text ?? '').trim()); } catch { return ''; } // only full links count, never a bare token
+  if (app) { // the link must belong to this app (same origin and path)
+    const path = x => x.replace(/index\.html$/, '');
+    if (u.origin !== app.origin || path(u.pathname) !== path(app.pathname)) return '';
+  }
+  const p = u.searchParams.get('p') || '';
   return isValidCode(p) ? p : '';
 }
 // small icon for a friend in 'wait': stable per dose, same on every phone (rocket, disco ball, sunglasses, big eyes)
@@ -98,9 +101,10 @@ export function iconFor(doseId) {
   return ICONS[h % 4];
 }
 const ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
-export function newId(rand = Math.random, len = 12) {
+export function newId(rand = null, len = 12) {
   let s = '';
-  for (let i = 0; i < len; i++) s += ID_CHARS[Math.floor(rand() * ID_CHARS.length)];
+  if (rand) { for (let i = 0; i < len; i++) s += ID_CHARS[Math.floor(rand() * ID_CHARS.length)]; return s; }
+  while (s.length < len) for (const b of globalThis.crypto.getRandomValues(new Uint8Array(len * 2))) if (b < 252 && s.length < len) s += ID_CHARS[b % 36]; // 252 = 7 * 36: unbiased
   return s;
 }
 
@@ -134,14 +138,15 @@ export const sortDosesDesc = doses => doses.slice().sort((a, b) => b.t - a.t || 
 // friend id this uid has claimed in the party (or null)
 export const myFriendId = (party, uid) => (party && Object.keys(party.claims).find(f => party.claims[f] === uid && party.friends.some(x => x.id === f))) || null;
 
-// change only HH:MM of an existing dose time, keeping its original date (never in the future)
+// change only HH:MM of an existing dose time, keeping its original date. null = invalid time, -1 = time lies in the future
 export function retime(str, origT, now = Date.now()) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(str).trim());
   if (!m || +m[1] > 23 || +m[2] > 59) return null;
   // HH:MM on the day before, of and after the original date; the one that is not in the future and closest to the original wins
   const cands = [-1, 0, 1].map(k => { const d = new Date(origT); d.setDate(d.getDate() + k); d.setHours(+m[1], +m[2], 0, 0); return d.getTime(); }).filter(t => t <= now);
-  if (!cands.length) return null;
-  return cands.reduce((x, y) => (Math.abs(y - origT) < Math.abs(x - origT) ? y : x));
+  if (!cands.length) return -1;
+  const best = cands.reduce((x, y) => (Math.abs(y - origT) < Math.abs(x - origT) ? y : x));
+  return Math.abs(best - origT) > 12 * 3600000 ? -1 : best; // -1: that time is in the future (it would jump about -24 h)
 }
 
 // show not-yet-acknowledged doses (the outbox) as if they were saved; mark them pending
@@ -156,6 +161,9 @@ export function mergePending(party, outbox) {
   }
   return { ...party, doses };
 }
+
+// text that goes into the share sheet: the URL INSIDE the text (several iOS targets such as WhatsApp drop a separate url field)
+export const shareText = (name, url) => `Doe mee met ${name} in De Michel: ${url}`;
 
 // link that joins a party: origin + path (no query) + ?p=PIN
 export const shareUrl = (origin, pathname, code) => `${origin}${pathname}?p=${code}`;

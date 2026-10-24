@@ -23,6 +23,8 @@ async function phone() {
 }
 // poll until fn() is truthy (no fixed sleeps: Firebase latency varies)
 const waitFor = async (fn, ms = 15000, what = 'condition') => { const t0 = Date.now(); for (;;) { try { const v = await fn(); if (v) return v; } catch { /* retry */ } if (Date.now() - t0 > ms) throw new Error('timeout waiting for ' + what); await sleep(250); } };
+// an alarm overlay from stale test data would cover the app: dismiss it before interacting
+const dismissAlarm = page => page.evaluate(() => { const a = document.getElementById('alarm'); if (a && a.classList.contains('on')) document.querySelector('[data-a=a-ok]').click(); });
 const click = (page, sel) => page.evaluate(s => document.querySelector(s).click(), sel);
 const state = page => page.evaluate(() => window.__michel.state);
 const toastText = page => page.$eval('#toast', e => e.textContent);
@@ -66,6 +68,7 @@ try {
       await A.page.click(`[data-a=claim][data-fid="${friendA}"]`);
       await sleep(2500);
       await click(A.page, '[data-a=rulesok]'); await sleep(500);
+      await dismissAlarm(A.page);
       assert.equal((await state(A.page)).parties.length, 1);
       assert.equal(await A.page.evaluate(() => !!document.querySelector('.card .you')), true);
     });
@@ -75,6 +78,8 @@ try {
       await A.page.click('[data-a=dose][data-size="0.25"]');
       await sleep(2500);
       await B.page.goto(`${base}/?prod=1&p=${PIN}`, { waitUntil: 'domcontentloaded' });
+      await waitFor(() => B.page.evaluate(() => !document.getElementById('splash')), 15000, 'splash gone on B');
+      await dismissAlarm(B.page);
       await waitFor(async () => (await state(B.page)).current === pid, 15000, 'B joined');
       await waitFor(() => B.page.evaluate(() => /Laatste:/i.test(document.body.innerText)), 15000, 'B sees the first dose');
       // live push: A adds another, B must update without reload

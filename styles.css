@@ -358,3 +358,32 @@ ol.steps svg{display:inline-block;width:20px;height:20px;vertical-align:-4px;col
 @keyframes blink{0%,92%,100%{transform:scaleY(1)}96%{transform:scaleY(.1)}}
 @media (prefers-reduced-motion:reduce){.ic .rk,.ic .dg,.ic .bl{animation:none}}
 
+
+/* alarm: the duotone splash photo strobes at 0.09 s per step: photo, yellow, inverted photo, black */
+.alarm{background:#000;color:var(--fg);animation:none}
+.abg,.aov{position:absolute;inset:0;pointer-events:none}
+.abg{background:#000 url(assets/splash.jpg) center top/cover no-repeat;animation:abgInv .36s steps(1) infinite}
+.aov{opacity:0;animation:aov .36s steps(1) infinite}
+@keyframes abgInv{0%{filter:none}50%{filter:invert(1)}}
+@keyframes aov{0%{opacity:0}25%{opacity:1;background:#FFE500}50%{opacity:0}75%{opacity:1;background:#000}}
+.alarm .atext{position:relative;z-index:1;align-self:flex-start;max-width:100%;padding:14px 16px 16px;border-radius:18px;background:#000;color:var(--fg);animation:atx .36s steps(1) infinite}
+@keyframes atx{0%{background:#000;color:#FFE500}50%{background:#FFE500;color:#000}}
+@keyframes whx{0%{background:#FFE500;color:#000}50%{background:#000;color:#FFE500}}
+.alarm .who{animation:whx .36s steps(1) infinite}
+.alarm .btns{position:relative;z-index:1}
+/* Rustig knipperen / reduced motion: static photo, only a slow 1 s yellow/black pulse on the text block */
+.alarm.calm .abg{animation:none;filter:none}
+.alarm.calm .aov{animation:none;opacity:0}
+.alarm.calm .atext{animation:atx 2s steps(1) infinite}
+.alarm.calm .who{animation:whx 2s steps(1) infinite}
+@media (prefers-reduced-motion:reduce){
+  .alarm .abg{animation:none;filter:none}
+  .alarm .aov{animation:none;opacity:0}
+  .alarm .atext{animation:atx 2s steps(1) infinite}
+  .alarm .who{animation:whx 2s steps(1) infinite}
+}
+
+.sheetopen .shr{display:none}
+.alarm .atext{align-self:stretch;overflow:hidden}
+.alarm h1{font-size:min(16vw,64px)}
+.alarm .who{font-size:min(21vw,88px);padding:6px 14px 0;overflow-wrap:normal;white-space:nowrap;max-width:100%}

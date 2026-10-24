@@ -65,6 +65,9 @@ try {
   await click(page, `.card[data-f="${joris}"]`); await sleep(400); // admin: opens the dose sheet
   await click(page, '[data-a=detail]'); await sleep(600);
   await click(page, '.hist li[data-did]'); await sleep(400);
+  await page.evaluate(() => { const i = document.getElementById('edit-t'); const d = new Date(Date.now() + 30 * 60000); i.value = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
+  await click(page, '[data-a=savedose]'); await sleep(300);
+  assert.match(await page.$eval('#toast', e => e.textContent), /Tijd ligt in de toekomst/); // no silent jump of -24 h
   await page.evaluate(() => { const i = document.getElementById('edit-t'); const d = new Date(Date.now() - 10 * 60000); i.value = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
   await click(page, '[data-a=savedose]'); await sleep(500); // toast "Tijd aangepast" is now visible
   await click(page, '.hist li[data-did]'); await sleep(400);
@@ -83,6 +86,13 @@ try {
   await click(page, '[data-a=share]'); await sleep(700);
   const url = await page.$eval('.qrcard', e => e.dataset.url);
   assert.equal(url, `${base}/?p=${CODE}`);
+  await page.evaluate(() => { window.__shared = null; navigator.share = async d => { window.__shared = d; }; });
+  await click(page, '[data-a=doshare]'); await sleep(300);
+  const shared = await page.evaluate(() => window.__shared);
+  assert.deepEqual(Object.keys(shared), ['text']); // the URL is inside the text, no separate url field
+  assert.ok(shared.text.includes(`?p=${CODE}`), shared.text);
+  assert.equal(await page.$('[data-a=copylink]') !== null, true);
+  assert.match(await page.$eval('.screen h1', e => e.textContent), /AWAKENINGS/i); // the title names the party being shared
   assert.equal(await page.$eval('.qrcard svg', e => !!e.querySelector('path')), true);
   const decoded = await page.evaluate(async () => {
     if (!('BarcodeDetector' in window)) return null;
@@ -218,6 +228,7 @@ try {
   await splashGone(page);
   assert.equal(await page.$eval('#start', e => getComputedStyle(e).display), 'flex');
   assert.match(await page.$eval('#start', e => e.textContent), /Vraag De Michel om de link of QR/);
+  assert.equal(await page.$eval('.shr', e => getComputedStyle(e).display), 'none'); // nothing to share without a party
   assert.equal(await page.$('[data-a=joinparty]'), null); // no code entry any more
   await page.evaluate(link => Object.defineProperty(navigator, 'clipboard', { value: { readText: async () => link, writeText: async () => {} }, configurable: true }), `${base}/?p=${newCodes[0]}`);
   await click(page, '[data-a=pastelink]'); await sleep(1500);
@@ -246,6 +257,20 @@ try {
   await splashGone(page);
   assert.equal((await page.evaluate(() => window.__michel.state)).outbox.length, 0);
   assert.equal(Object.keys((await get('/parties/' + PID)).doses).length, before);
+  await page.close();
+
+  // ---- test alarm: photo strobe, runs a full 60 s on its own, then closes ----
+  page = await phone('?devuid=dev-admin');
+  await splashGone(page);
+  await page.evaluate(() => { for (const d of document.querySelectorAll('#alarm.on [data-a=a-ok]')) d.click(); });
+  await click(page, '[data-tab=settings]'); await sleep(300);
+  await click(page, '[data-a=test]'); await sleep(4000);
+  assert.equal(await page.$eval('#alarm', e => e.classList.contains('on')), true);
+  assert.match(await page.$eval('.abg', e => getComputedStyle(e).backgroundImage), /splash.jpg/);
+  await sleep(52000);
+  assert.equal(await page.$eval('#alarm', e => e.classList.contains('on')), true, 'test alarm stopped before 60 s');
+  await sleep(10000);
+  assert.equal(await page.$eval('#alarm', e => e.classList.contains('on')), false, 'test alarm did not close after 60 s');
   await page.close();
 
   // ---- install screen: iPhone Safari tab (not standalone) ----

@@ -32,6 +32,9 @@ function toWrites(op, a, tree, who) {
     }
     case 'setMax': return [{ path: [...P, 'friends', a.f, 'max'], value: a.max }];
     case 'addMe': return [{ path: [...P, 'friends', a.f], value: { name: a.name, createdAt: NOW } }, { path: [...P, 'claims', a.f], value: uid }, { path: [...P, 'members', uid], value: a.f }];
+    case 'rotate': return [{ path: ['codes', a.code], value: a.pid ?? PID }, { path: [...P, 'codes', a.code], value: NOW }, ...a.old.flatMap(c => [{ path: ['codes', c], value: null }, { path: [...P, 'codes', c], value: null }])];
+    case 'closeDisable': return [{ path: [...P, 'closedAt'], value: NOW }, ...a.codes.flatMap(c => [{ path: ['codes', c], value: null }, { path: [...P, 'codes', c], value: null }])];
+    case 'disableAll': return a.codes.flatMap(c => [{ path: ['codes', c], value: null }, { path: [...P, 'codes', c], value: null }]);
     case 'removeFriend': {
       const w = [{ path: [...P, 'friends', a.f], value: null }];
       for (const [id, d] of Object.entries(party?.doses ?? {})) if (d.friendId === a.f) w.push({ path: [...P, 'doses', id], value: null });
@@ -69,6 +72,9 @@ function toHttp(op, a, ids) {
     case 'addFriend': return ['POST', `${base}/friends`, { name: a.name, createdAt: NOW, ...(a.max !== undefined ? { max: a.max } : {}) }, 'f:' + a.f];
     case 'setMax': return ['PATCH', `${base}/friends/${fid(a.f)}`, { max: a.max }];
     case 'addMe': return ['POST', `${base}/friends`, { name: a.name, claim: true }, 'f:' + a.f];
+    case 'rotate': return ['POST', `${base}/codes/rotate`, { code: a.code, old: a.old }];
+    case 'closeDisable': return ['POST', `${base}/close`, { disableLink: true }];
+    case 'disableAll': return ['DELETE', `${base}/codes`];
     case 'removeFriend': return ['DELETE', `${base}/friends/${fid(a.f)}`];
     case 'addDose': return ['POST', `${base}/doses`, { id: a.d, friendId: fid(a.f), size: a.size ?? 1, t: a.t ?? NOW, addedAt: NOW }, 'd:' + a.d];
     case 'setT': return ['PATCH', `${base}/doses/${did(a.d)}`, { t: a.t }];
@@ -259,4 +265,28 @@ test('rules: unauthenticated writes are denied; admin cannot be spoofed', () => 
   assert.equal(checkUpdate(rules, tree, [{ path: ['codes', 'Tok8209Alpha'], value: PID }], { uid: 'a' }, NOW), false);
   // a stranger cannot attach a code to someone else's party
   assert.equal(checkUpdate(rules, tree, [{ path: ['codes', 'Tok4444Alpha'], value: PID }], { uid: 'mallory' }, NOW), false);
+});
+
+test('parity: new link and switching the link off are atomic and admin-only', async () => {
+  await run([
+    ['admin', 'createParty', { codes: ['TokPar1AAAAa', 'TokPar2BBBBb'] }, 'ok'],
+    ['bob', 'rotate', { code: 'TokParNewAAAA', old: ['TokPar1AAAAa'] }, 'deny'], // not the admin
+    ['admin', 'rotate', { code: 'TokPar2BBBBb', old: ['TokPar1AAAAa'] }, 'deny'], // new token already taken
+    ['admin', 'rotate', { code: 'TokParNewAAAA', old: ['TokParNOPEAAA'] }, 'deny'], // old token is not this party's
+    ['admin', 'rotate', { code: 'short', old: ['TokPar1AAAAa'] }, 'deny'], // invalid token
+    ['admin', 'rotate', { code: 'TokParNewAAAA', old: ['TokPar1AAAAa', 'TokPar2BBBBb'] }, 'ok'], // one write: in + both out
+    ['admin', 'rotate', { code: 'TokParNew2AAA', old: ['TokParNewAAAA'] }, 'ok'],
+    ['bob', 'closeDisable', { codes: ['TokParNew2AAA'] }, 'deny'],
+    ['admin', 'closeDisable', { codes: ['TokParNew2AAA'] }, 'ok'], // closedAt + delete in one write
+    ['admin', 'rotate', { code: 'TokParLateAAA', old: [] }, 'deny'], // closed: no new links
+    ['admin', 'closeDisable', { codes: [] }, 'deny'], // already closed
+    ['admin', 'createParty', { pid: 'party-test-0002', codes: ['TokPar3CCCCc'] }, 'ok'],
+  ]);
+  await run([
+    ['admin', 'createParty', { codes: ['TokPar4DDDDd'] }, 'ok'],
+    ['admin', 'close', {}, 'ok'], // closed with the link still on
+    ['bob', 'disableAll', { codes: ['TokPar4DDDDd'] }, 'deny'],
+    ['admin', 'disableAll', { codes: ['TokPar4DDDDd'] }, 'ok'], // the admin can still switch it off after closing
+    ['admin', 'disableAll', { codes: ['TokPar4DDDDd'] }, 'deny'], // nothing left to delete
+  ]);
 });

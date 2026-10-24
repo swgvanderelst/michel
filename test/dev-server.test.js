@@ -413,3 +413,36 @@ test('renaming keeps claims and doses linked (the friend id does not change); ad
   assert.equal((await call('admin-1', 'PATCH', `${b}/friends/${a.body.id}`, { name: '' })).status, 400);
   assert.equal((await call('admin-1', 'PATCH', `${b}/friends/${a.body.id}`, { name: 'x'.repeat(15) })).status, 400);
 });
+
+test('new link is one atomic step: new token in, old tokens out; bad input changes nothing', async () => {
+  const id = await party(['TokRotAAAAAa', 'TokRotBBBBBb']);
+  const url = `/api/parties/${id}/codes/rotate`;
+  assert.equal((await call('mallory-1', 'POST', url, { code: 'TokRotNewAAAA', old: ['TokRotAAAAAa'] })).status, 403);
+  assert.equal((await call('admin-1', 'POST', url, { code: 'TokRotBBBBBb', old: ['TokRotAAAAAa'] })).status, 409); // taken: nothing deleted
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/TokRotAAAAAa')).status, 200);
+  assert.equal((await call('admin-1', 'POST', url, { code: 'TokRotNewAAAA', old: ['TokRotNOPEAAA'] })).status, 400); // unknown old code
+  assert.equal((await call('admin-1', 'POST', url, { code: 'short', old: [] })).status, 400);
+  assert.equal((await call('admin-1', 'POST', url, { code: 'TokRotNewAAAA', old: ['TokRotAAAAAa', 'TokRotBBBBBb'] })).status, 200);
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/TokRotAAAAAa')).status, 404);
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/TokRotBBBBBb')).status, 404);
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/TokRotNewAAAA')).body.partyId, id);
+  assert.deepEqual(Object.keys((await call('admin-1', 'GET', '/api/parties/' + id)).body.codes), ['TokRotNewAAAA']);
+  await call('admin-1', 'POST', `/api/parties/${id}/close`);
+  assert.equal((await call('admin-1', 'POST', url, { code: 'TokRotLateAAAA', old: ['TokRotNewAAAA'] })).status, 403); // closed
+});
+
+test('closing can switch the link off in the same step; a closed party can still be switched off by the admin', async () => {
+  const id = await party(['TokClsAAAAAa', 'TokClsBBBBBb']);
+  assert.equal((await call('mallory-1', 'POST', `/api/parties/${id}/close`, { disableLink: true })).status, 403);
+  assert.equal((await call('admin-1', 'POST', `/api/parties/${id}/close`, { disableLink: true })).status, 200);
+  const p = (await call('bob-0001', 'GET', '/api/parties/' + id)).body;
+  assert.equal(p.closedAt, NOW);
+  assert.equal(p.codes, undefined);
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/TokClsAAAAAa')).status, 404);
+  const id2 = await party(['TokCls2AAAAa']);
+  await call('admin-1', 'POST', `/api/parties/${id2}/close`); // closed but link still on
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/TokCls2AAAAa')).status, 200);
+  assert.equal((await call('mallory-1', 'DELETE', `/api/parties/${id2}/codes`)).status, 403);
+  assert.equal((await call('admin-1', 'DELETE', `/api/parties/${id2}/codes`)).status, 200); // "Link uitschakelen"
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/TokCls2AAAAa')).status, 404);
+});

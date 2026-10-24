@@ -32,25 +32,47 @@ test('sw.js: parses, cleans old caches, never touches API or Firebase traffic', 
   await new Promise(r => setTimeout(r, 20));
 });
 
-test('sw.js: network-first for navigations and same-origin js/css, cache fallback when offline', async () => {
+function swHarness({ timeoutMs = 40 } = {}) {
   const handlers = {};
-  const store = new Map([['https://x.github.io/app.js', 'OLD-JS'], ['https://x.github.io/icon-192.png', 'CACHED-ICON']]);
-  const cache = {
-    match: async r => { const v = store.get(typeof r === 'string' ? 'https://x.github.io/' + r : r.url); return v ? { v } : undefined; },
-    put: async (r, res) => { store.set(r.url, res.v); },
-  };
-  let online = true;
+  const store = new Map([['https://x.github.io/app.js', 'OLD-JS'], ['https://x.github.io/index.html', 'OLD-INDEX'], ['https://x.github.io/icon-192.png', 'CACHED-ICON']]);
+  const keyOf = r => (typeof r === 'string' ? 'https://x.github.io/' + r : r.url.replace(/\?.*$/, ''));
+  const cache = { match: async r => { const v = store.get(keyOf(r)); return v ? { v } : undefined; }, put: async (r, res) => { store.set(keyOf(r), res.v); } };
+  const h = { fetchImpl: async () => ({ ok: true, v: 'NEW', clone() { return this; } }) };
   const ctx = {
-    self: { addEventListener: (t, f) => { handlers[t] = f; }, location: { origin: 'https://x.github.io' }, skipWaiting() {}, clients: { claim() {} } },
-    caches: { open: async () => cache }, Request: class {}, Response,
-    fetch: async () => { if (!online) throw new Error('offline'); return { ok: true, v: 'NEW', clone() { return this; } }; },
-    URL,
+    self: { addEventListener: (t, f) => { handlers[t] = f; }, location: { origin: 'https://x.github.io' }, skipWaiting() {}, clients: { claim() {} }, MICHEL_NAV_TIMEOUT_MS: timeoutMs },
+    caches: { open: async () => cache }, Request: class {}, Response, URL, setTimeout, fetch: (...a) => h.fetchImpl(...a),
   };
   vm.runInNewContext(src, ctx);
-  const ask = async (url, mode = 'cors') => { let p; handlers.fetch({ request: { method: 'GET', url, mode }, respondWith: x => { p = x; }, waitUntil() {} }); return (await p).v; };
-  assert.equal(await ask('https://x.github.io/app.js'), 'NEW'); // network wins: versions never mix
-  assert.equal(await ask('https://x.github.io/icon-192.png'), 'CACHED-ICON'); // static assets stay cache-first
-  online = false;
-  assert.equal(await ask('https://x.github.io/app.js'), 'NEW'); // fell back to what the last good load stored
-  assert.match(src, /michel-v2/);
+  const waits = [];
+  const ask = async (url, mode = 'cors') => { let p; handlers.fetch({ request: { method: 'GET', url, mode }, respondWith: x => { p = x; }, waitUntil: w => waits.push(w) }); return (await p).v; };
+  return { h, ask, store, waits };
+}
+
+test('sw.js: a fast network gives the fresh page and updates the cache', async () => {
+  const { ask, store } = swHarness();
+  assert.equal(await ask('https://x.github.io/', 'navigate'), 'NEW');
+  assert.equal(store.get('https://x.github.io/'), 'NEW');
+});
+
+test('sw.js: a slow network times out to the cached page, and the fetch still refreshes the cache', async () => {
+  const { h, ask, store, waits } = swHarness({ timeoutMs: 30 });
+  h.fetchImpl = () => new Promise(r => setTimeout(() => r({ ok: true, v: 'LATE', clone() { return this; } }), 150));
+  const t0 = Date.now();
+  assert.equal(await ask('https://x.github.io/index.html', 'navigate'), 'OLD-INDEX'); // served from the cache
+  assert.ok(Date.now() - t0 < 120, 'must not wait for the slow network');
+  assert.equal(waits.length, 1); // the fetch is kept alive via waitUntil
+  await Promise.all(waits);
+  assert.equal(store.get('https://x.github.io/index.html'), 'LATE'); // cache updated for the next start
+});
+
+test('sw.js: offline serves the cached page; first visit offline fails; modules come cache-first from the same generation', async () => {
+  const { h, ask } = swHarness();
+  h.fetchImpl = async () => { throw new Error('offline'); };
+  assert.equal(await ask('https://x.github.io/', 'navigate'), 'OLD-INDEX');
+  assert.equal(await ask('https://x.github.io/app.js'), 'OLD-JS'); // never touches the network: index and modules stay one generation
+  assert.equal(await ask('https://x.github.io/icon-192.png'), 'CACHED-ICON');
+  h.fetchImpl = async () => ({ ok: true, v: 'NEW-JS', clone() { return this; } });
+  assert.equal(await ask('https://x.github.io/app.js'), 'OLD-JS'); // even online: cache-first, updates arrive with the VERSION bump
+  assert.equal(await ask('https://x.github.io/logic.js'), 'NEW-JS'); // a module missing from the cache is fetched
+  assert.match(src, /michel-v3/);
 });

@@ -158,13 +158,18 @@ test('newToken: 12 chars from [A-Za-z0-9], unbiased, injectable randomness', () 
   assert.ok(seen.size > 55);
 });
 
-test('tokenFromLink: link, bare token, junk', () => {
-  assert.equal(L.tokenFromLink('https://x.github.io/michel/?p=AbCdEf123456'), 'AbCdEf123456');
-  assert.equal(L.tokenFromLink('  https://x.github.io/michel/?foo=1&p=AbCdEf123456#x '), 'AbCdEf123456');
-  assert.equal(L.tokenFromLink('michel/?p=AbCdEf123456'), 'AbCdEf123456'); // not a full URL
-  assert.equal(L.tokenFromLink('AbCdEf123456'), 'AbCdEf123456');
-  assert.equal(L.tokenFromLink('https://x.github.io/michel/?p=8209'), ''); // old 4-digit pin
-  for (const bad of ['', null, 'hello world', 'https://x.github.io/michel/']) assert.equal(L.tokenFromLink(bad), '');
+test('tokenFromLink: only full links of this app', () => {
+  const app = { origin: 'https://x.github.io', pathname: '/michel/' };
+  assert.equal(L.tokenFromLink('https://x.github.io/michel/?p=AbCdEf123456', app), 'AbCdEf123456');
+  assert.equal(L.tokenFromLink('  https://x.github.io/michel/?foo=1&p=AbCdEf123456#x ', app), 'AbCdEf123456');
+  assert.equal(L.tokenFromLink('https://x.github.io/michel/index.html?p=AbCdEf123456', app), 'AbCdEf123456');
+  assert.equal(L.tokenFromLink('https://evil.example/michel/?p=AbCdEf123456', app), ''); // other origin
+  assert.equal(L.tokenFromLink('https://x.github.io/other/?p=AbCdEf123456', app), ''); // other path
+  assert.equal(L.tokenFromLink('AbCdEf123456', app), ''); // a bare token is not accepted
+  assert.equal(L.tokenFromLink('michel/?p=AbCdEf123456', app), ''); // not a full URL
+  assert.equal(L.tokenFromLink('https://anything.example/x?p=AbCdEf123456'), 'AbCdEf123456'); // no app given: any link (tools)
+  assert.equal(L.tokenFromLink('https://x.github.io/michel/?p=8209', app), ''); // old 4-digit pin
+  for (const bad of ['', null, 'hello world', 'https://x.github.io/michel/']) assert.equal(L.tokenFromLink(bad, app), '');
 });
 
 test('iconFor: stable per dose id, covers all four icons', () => {
@@ -177,7 +182,9 @@ test('iconFor: stable per dose id, covers all four icons', () => {
 });
 
 test('newId', () => {
-  assert.match(L.newId(), /^[a-z0-9]{12}$/);
+  assert.match(L.newId(), /^[a-z0-9]{12}$/); // crypto-backed by default
+  assert.notEqual(L.newId(), L.newId());
+  assert.equal(L.newId(null, 5).length, 5);
   assert.equal(L.newId(() => 0, 4), 'aaaa');
 });
 
@@ -249,11 +256,9 @@ test('retime keeps the original date, only HH:MM changes', () => {
   const r = L.retime('23:10', orig, now);
   assert.equal(new Date(r).getDate(), 20);
   assert.equal(L.hhmm(r), '23:10');
-  // original today, new time later than now -> not in the future, goes to yesterday
+  // original today 09:00, new time 18:00 is after now (12:00): rejected, not silently moved to yesterday
   const today = new Date(2026, 9, 24, 9, 0).getTime();
-  const f = L.retime('18:00', today, now);
-  assert.equal(new Date(f).getDate(), 23);
-  assert.equal(L.hhmm(f), '18:00');
+  assert.equal(L.retime('18:00', today, now), -1);
   assert.equal(L.retime('25:00', orig, now), null);
   assert.equal(L.retime('x', orig, now), null);
   assert.ok(L.retime('00:00', Date.now()) <= Date.now());
@@ -329,7 +334,8 @@ test('retime across midnight: 23:50 on the 24th edited to 00:10 at 00:30 becomes
   assert.equal(r, new Date(2026, 9, 25, 0, 10).getTime());
   // and the other way: 00:10 on the 25th edited back to 23:55 stays on the 24th
   assert.equal(L.retime('23:55', new Date(2026, 9, 25, 0, 10).getTime(), now), new Date(2026, 9, 24, 23, 55).getTime());
-  assert.equal(L.retime('23:50', orig, new Date(2026, 9, 24, 23, 40).getTime()), new Date(2026, 9, 23, 23, 50).getTime()); // never in the future
+  assert.equal(L.retime('23:50', orig, new Date(2026, 9, 24, 23, 40).getTime()), -1); // same-day time in the future: rejected, no jump of -24 h
+  assert.equal(L.retime('23:55', new Date(2026, 9, 25, 0, 10).getTime(), now), new Date(2026, 9, 24, 23, 55).getTime()); // just before midnight is still fine
 });
 
 test('alarmGate: live snapshot, or cache when offline / after 5 s without a snapshot', () => {
@@ -343,4 +349,12 @@ test('alarmGate: live snapshot, or cache when offline / after 5 s without a snap
 test('normalizeParty orders codes by the stored order (0 = main), not alphabetically', () => {
   const p = L.normalizeParty('p', { name: 'N', admin: 'u', createdAt: 1, codes: { 7815: 1, 8209: 0 } });
   assert.deepEqual(p.codes, ['8209', '7815']);
+});
+
+test('shareText: the link with ?p=<token> is INSIDE the text', () => {
+  const url = L.shareUrl('https://x.github.io', '/michel/', 'AbCdEf123456');
+  const text = L.shareText('AWAKENINGS ADE 2026', url);
+  assert.ok(text.includes('?p=AbCdEf123456'));
+  assert.ok(text.includes('AWAKENINGS ADE 2026'));
+  assert.equal(L.tokenFromLink(text.slice(text.indexOf('http'))), 'AbCdEf123456'); // a recipient can pull the link back out of the text
 });

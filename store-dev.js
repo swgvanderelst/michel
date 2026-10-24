@@ -73,6 +73,8 @@ export async function createStore() {
     },
     createParty: ({ id, name, codes }) => api('POST', '/parties', { id, name, codes }),
     addCode: (pid, code) => api('POST', `/parties/${pid}/codes`, { code }),
+    rotateLink: (pid, code, old) => api('POST', `/parties/${pid}/codes/rotate`, { code, old }),
+    disableLink: pid => api('DELETE', `/parties/${pid}/codes`),
     deleteCode: (pid, code) => api('DELETE', `/parties/${pid}/codes/${code}`),
     async addFriend(pid, name, max) {
       const r = await api('POST', `/parties/${pid}/friends`, { name, ...(max != null ? { max } : {}) });
@@ -96,6 +98,6 @@ export async function createStore() {
     removeDose: (pid, did) => api('DELETE', `/parties/${pid}/doses/${did}`),
     claim: (pid, fid) => api('POST', `/parties/${pid}/claims`, { friendId: fid }),
     release: (pid, fid) => api('DELETE', `/parties/${pid}/claims/${fid}`),
-    closeParty: pid => api('POST', `/parties/${pid}/close`, {}),
+    closeParty: (pid, disableCodes = []) => api('POST', `/parties/${pid}/close`, disableCodes.length ? { disableLink: true } : {}),
   };
 }

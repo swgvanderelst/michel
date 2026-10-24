@@ -124,7 +124,9 @@ const checkStamp = body => { if ('createdAt' in body && !okTime(body.createdAt, 
 
     if (rest[0] === 'close' && method === 'POST') {
       needAdmin(p, uid); needOpen(p);
+      if (body !== undefined) onlyKeys(body, ['disableLink']);
       p.closedAt = now();
+      if (body && body.disableLink === true) { for (const c of Object.keys(p.codes || {})) delete db.codes[c]; delete p.codes; } // closing and switching the link off in one atomic step
       push(id);
       return [200, { ok: true }];
     }
@@ -140,6 +142,26 @@ const checkStamp = body => { if ('createdAt' in body && !okTime(body.createdAt, 
         (p.codes ||= {})[body.code] = now();
         push(id);
         return [201, { code: body.code }];
+      }
+      if (rest.length === 2 && rest[1] === 'rotate' && method === 'POST') { // new link: add the new token and delete the old ones, atomically
+        needAdmin(p, uid); needOpen(p);
+        onlyKeys(body, ['code', 'old']);
+        if (typeof body.code !== 'string' || !CODE_RE.test(body.code)) throw bad('code');
+        if (!Array.isArray(body.old) || body.old.some(c => p.codes?.[c] === undefined || db.codes[c] !== id)) throw bad('old');
+        if (db.codes[body.code]) throw new HttpError(409, 'code taken');
+        for (const c of body.old) { delete p.codes[c]; delete db.codes[c]; }
+        db.codes[body.code] = id;
+        (p.codes ||= {})[body.code] = now();
+        push(id);
+        return [200, { code: body.code }];
+      }
+      if (rest.length === 1 && method === 'DELETE') { // switch the link off (admin, also after closing)
+        needAdmin(p, uid);
+        if (!Object.keys(p.codes || {}).length) throw new HttpError(404, 'no codes');
+        for (const c of Object.keys(p.codes || {})) delete db.codes[c];
+        delete p.codes;
+        push(id);
+        return [200, { ok: true }];
       }
       if (rest.length === 2 && method === 'DELETE') {
         needAdmin(p, uid); // also allowed after closing

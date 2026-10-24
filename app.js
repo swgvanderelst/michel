@@ -285,6 +285,7 @@ function barState() {
   $('#sync').classList.toggle('dot', tab === 'settings');
   $('#sync span').textContent = online ? 'LIVE' : 'OFFLINE';
   $('#ctitle').textContent = tab === 'crew' ? (p ? p.name : '') : TITLES[tab];
+  $('.shr').style.display = p && !p.closed ? '' : 'none'; // no party, or a closed one: nothing to share
 }
 
 function titleBlock(p) {
@@ -364,8 +365,9 @@ function settingsView(p) {
     ${meF ? `<p class="note" style="margin-top:0">Jij bent <b>${esc(meF.name)}</b>.</p><button class="big ghost" data-a="notme" style="height:66px;font-size:24px" ${open ? '' : 'disabled'}>Ik ben iemand anders</button>`
       : `<button class="big ghost" data-a="whoami" style="height:66px;font-size:24px" ${open ? '' : 'disabled'}>${admin ? 'Kies mijn naam' : 'Wie ben jij?'}</button>`}
     <div class="h3">Uitnodigingslink ${mb(admin)}</div>
-    <div class="lrow" style="margin-top:6px">${mb(admin)}<button class="big outline ${admin && open ? '' : 'off'}" style="margin-top:0;height:66px;font-size:24px" data-a="newlink">Nieuwe link maken</button></div>
+    <div class="lrow" style="margin-top:6px">${mb(admin)}<button class="big outline ${admin && open && !linkBusy ? '' : 'off'}" style="margin-top:0;height:66px;font-size:24px" data-a="newlink" ${linkBusy ? 'disabled' : ''}>Nieuwe link maken</button></div>
     <p class="note" style="margin-top:8px">De oude link en QR werken daarna niet meer.</p>
+    ${admin && !open && p.codes.length ? `<div class="lrow" style="margin-top:10px">${mb()}<button class="big danger" style="margin-top:0;height:66px;font-size:24px" data-a="disablelink">Link uitschakelen</button></div>` : ''}
     <div class="h3">Gekozen namen ${mb(admin)}</div>${claims}
     <div class="h3">Feestje ${mb(admin)}</div>
     <div class="lrow" style="margin-top:6px">${mb(admin)}<button class="big danger ${admin && open ? '' : 'off'}" style="margin-top:0" data-a="closeparty">Feestje afsluiten</button></div>
@@ -410,7 +412,7 @@ function claimBuild() {
     <p class="lead">${admin ? 'Optioneel: ben jij zelf ook een van de vrienden?' : 'Kies je naam. Dan kun jij zelf snoepjes invoeren en krijg je alarm voor jezelf.'}</p>
     <div class="who2 pagewho" style="margin-top:16px">${btns}</div>
     ${p.friends.length ? '' : '<p class="note">Er zijn nog geen vrienden toegevoegd.</p>'}
-    ${admin ? `<div class="lrow" style="margin-top:12px">${mb()}<button class="big outline" style="margin-top:0" data-a="addme">+ Mijn naam toevoegen</button></div>` : ''}
+    ${admin && !me ? `<div class="lrow" style="margin-top:12px">${mb()}<button class="big outline" style="margin-top:0" data-a="addme">+ Mijn naam toevoegen</button></div>` : ''}
     <p class="note">Staat je naam er niet tussen? Vraag De Michel.</p>
     <button class="big ghost" data-a="claimskip" style="margin-top:22px;height:62px;font-size:24px">${admin ? 'Sla over' : 'Later'}</button>`;
 }
@@ -485,6 +487,7 @@ function onPlus() {
   openClaim();
 }
 
+let linkBusy = false;
 const doseState = { min: 0, custom: '' };
 function openDose(fid) {
   const p = P(), f = p && friendOf(p, fid); if (!f) return;
@@ -607,14 +610,17 @@ function qrSvg(text, px) {
   return `<svg viewBox="0 0 ${size} ${size}" width="${px}" height="${px}" shape-rendering="crispEdges" role="img" aria-label="QR-code"><rect width="${size}" height="${size}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
 }
 function shareBuild() {
-  const p = P(); if (!p) return null;
-  const code = p.codes[0] || '', url = linkFor(p, code); // the QR always carries the main code's link; no PIN is shown on this screen
+  const p = P(); if (!p || p.closed) return null; // sharing only exists inside an open party
+  const code = p.codes[0] || '', url = linkFor(p, code); // the QR always carries the main code's link; no code is shown on this screen
   const unclaimed = isAdmin(p) && p.friends.some(f => !p.claims[f.id]);
-  if (!code) return `<h1 style="font-size:100px;margin-top:0">Delen</h1><p class="lead">De link is uitgeschakeld. ${isAdmin(p) && !p.closed ? 'Maak in Opties een nieuwe link.' : ''}</p>`;
-  return `<h1 style="font-size:100px;margin-top:0">Delen</h1>
-    <div class="qrcard" data-url="${esc(url)}">${code ? qrSvg(url, 260) : ''}</div>
+  const nm = p.name, px = Math.max(34, Math.min(64, Math.floor(330 / (Math.max(...nameLines(nm).map(l => l.length)) * 0.5))));
+  const title = `<h1 style="font-size:${px}px;line-height:.95;margin-top:0">Deel<br>${nameLines(nm).map(esc).join('<br>')}</h1>`;
+  if (!code) return title + `<p class="lead">${isAdmin(p) ? 'Geen link: maak een nieuwe link (Opties)' : 'Er is geen link beschikbaar. Vraag De Michel om een nieuwe.'}</p>`;
+  return title + `
+    <div class="qrcard" data-url="${esc(url)}">${qrSvg(url, 260)}</div>
     <button class="big ghost" data-a="qrfull" style="height:62px;font-size:24px">${ICON.expand}<span>Volledig scherm</span></button>
     <button class="big" data-a="doshare" style="margin-top:12px"><span style="font-size:25px">Deel via WhatsApp</span></button>
+    <button class="big ghost" data-a="copylink" style="height:62px;font-size:24px">Kopieer link</button>
     ${unclaimed ? `<p class="note">Nieuwe vriend? Voeg eerst zijn naam toe ${mb()}, laat hem dan scannen.</p>` : ''}`;
 }
 function openQrFull() {
@@ -648,7 +654,7 @@ const joinState = { busy: false };
 async function pasteLink() {
   let text = '';
   try { text = await nav.clipboard.readText(); } catch { /* denied or unsupported */ }
-  const tok = L.tokenFromLink(text);
+  const tok = L.tokenFromLink(text, { origin: location.origin, pathname: location.pathname });
   if (tok) return joinWithCode(tok);
   closeSheet();
   sheet(`<div class="sh-name">Plak link</div><div class="sh-sub">Plak hier de link die je van De Michel kreeg.</div>
@@ -798,15 +804,17 @@ document.addEventListener('click', async e => {
     case 'switch': current = d.pid; persistParties(); tab = 'crew'; closeSheet(); $('#scroll').scrollTop = 0; render(); return;
     case 'newparty': return openNewParty();
     case 'pastelink': return pasteLink();
-    case 'pastego': { const tok = L.tokenFromLink(($('#paste-in') || {}).value); if (!tok) return toast('Dat is geen geldige link'); closeSheet(); return joinWithCode(tok); }
+    case 'pastego': { const tok = L.tokenFromLink(($('#paste-in') || {}).value, { origin: location.origin, pathname: location.pathname }); if (!tok) return toast('Dat is geen geldige link'); closeSheet(); return joinWithCode(tok); }
     case 'createparty': return createParty();
     case 'plus': return onPlus();
-    case 'share': if (p) pushScreen('delen', 'Crew', shareBuild, { live: true }); return;
+    case 'share': if (p && !p.closed) pushScreen('delen', 'Crew', shareBuild, { live: true }); return;
+    case 'copylink': { if (!p || !p.codes[0]) return; toast(await copyText(linkFor(p)) ? 'Link gekopieerd' : esc(linkFor(p))); return; }
     case 'qrfull': return openQrFull();
     case 'doshare': {
-      if (!p) return;
-      const url = linkFor(p), text = `Doe mee met ${p.name} in De Michel`;
-      if (nav.share) { try { await nav.share({ title: 'De Michel', text, url }); } catch { /* cancelled */ } return; }
+      if (!p || p.closed) return;
+      if (!p.codes[0]) return toast('Geen link: maak een nieuwe link (Opties)');
+      const url = linkFor(p), text = L.shareText(p.name, url); // URL inside the text, no separate url field
+      if (nav.share) { try { await nav.share({ text }); } catch { /* cancelled */ } return; }
       toast(await copyText(url) ? 'Link gekopieerd' : esc(url));
       return;
     }
@@ -824,6 +832,7 @@ document.addEventListener('click', async e => {
     case 'savedose': {
       const did = sheetCtx.did, dd = p.doses.find(x => x.id === did);
       const t = dd && L.retime($('#edit-t').value, dd.t, nowMs());
+      if (t === -1) return toast('Tijd ligt in de toekomst');
       if (!t) return toast('Kies een tijd');
       closeSheet();
       try { await quick(store.setDoseTime(current, did, t)); toast('Tijd aangepast'); } catch (err) { fail(err); }
@@ -854,7 +863,7 @@ document.addEventListener('click', async e => {
     }
     case 'claimskip': { if (isAdmin(p)) ls.set('michel_skipclaim_' + p.id, true); else skippedClaim.add(p.id); const s = screens.find(x => x.key === 'claim'); if (s) popScreen(s); return; }
     case 'rename': return openRename(d.fid);
-    case 'addme': return isAdmin(p) ? openAddMe() : adminOnly();
+    case 'addme': return !isAdmin(p) ? adminOnly() : meOf(p) ? toast('Je hebt al een naam gekozen') : openAddMe();
     case 'whoami': { skippedClaim.delete(p.id); ls.set('michel_skipclaim_' + p.id, false); return openClaim(); }
     case 'notme': {
       if (p.closed) return toast('Dit feestje is afgesloten');
@@ -877,11 +886,20 @@ document.addEventListener('click', async e => {
       if (p.closed) return toast('Dit feestje is afgesloten');
       const pid = current, old = p.codes.slice();
       confirmSheet({ title: 'Nieuwe link maken?', text: 'De oude link en QR werken daarna niet meer. Wie al in het feestje zit, blijft erin. Deel daarna de nieuwe link of QR.', ok: 'Nieuwe link maken', onOk: async () => {
+        if (linkBusy) return;
+        linkBusy = true; render(); // the button is disabled while the write is in flight
         try {
-          for (let i = 0; ; i++) { try { await store.addCode(pid, L.newToken()); break; } catch (e) { if (!(e && e.code === 'taken') || i > 2) throw e; } }
-          for (const c of old) await store.deleteCode(pid, c);
+          const token = L.newToken();
+          for (let i = 0; ; i++) { try { await store.rotateLink(pid, i ? L.newToken() : token, old); break; } catch (e) { if (!(e && e.code === 'taken') || i > 2) throw e; } } // ONE atomic write
           toast('Nieuwe link gemaakt. Deel de nieuwe QR.');
-        } catch (err) { fail(err); } } });
+        } catch (err) { toast('Nieuwe link maken mislukt, probeer opnieuw'); } finally { linkBusy = false; render(); } } });
+      return;
+    }
+    case 'disablelink': {
+      if (!isAdmin(p)) return adminOnly();
+      const pid = current, codes = p.codes.slice();
+      confirmSheet({ title: 'Link uitschakelen?', text: 'Daarna werken de link en QR niet meer. Wie al in het feestje zit, blijft erin.', ok: 'Link uitschakelen', onOk: async () => {
+        try { await store.disableLink(pid, codes); toast('Link uitgeschakeld'); } catch (err) { fail(err); } } });
       return;
     }
     case 'closeparty': {
@@ -897,8 +915,7 @@ document.addEventListener('click', async e => {
       const codes = d.a === 'closeall' && sheetCtx ? sheetCtx.codes : [], pid = current;
       closeSheet();
       try {
-        await store.closeParty(pid);
-        for (const c of codes) await store.deleteCode(pid, c);
+        await store.closeParty(pid, codes); // one atomic write: closedAt + the codes
         toast(codes.length ? 'Feestje afgesloten, link uitgeschakeld' : 'Feestje afgesloten');
       } catch (err) { fail(err); }
       return;
@@ -915,7 +932,7 @@ document.addEventListener('click', async e => {
 });
 
 // ---------- alarm ----------
-const alarm = { target: null };
+const alarm = { target: null, testT: null };
 const seenMap = () => ls.get('michel_seen', {});
 const snoozeMap = () => ls.get('michel_snooze', {});
 
@@ -951,7 +968,9 @@ function showAlarm(a) {
   fillAlarm();
   $('#alarm').classList.toggle('calm', settings.calm);
   $('#alarm').classList.add('on');
-  startMusic(!settings.calm && !reducedMotion());
+  startMusic(false); // the strobe is pure CSS (photo / yellow / inverted photo / black); the music does not flip it
+  clearTimeout(alarm.testT);
+  if (!a) alarm.testT = setTimeout(() => { if (alarm.target && alarm.target.test) hideAlarm('done'); }, 60000); // the test alarm runs a full 60 s unless a button is pressed
   if (nav.vibrate && nav.userActivation && nav.userActivation.hasBeenActive) { try { nav.vibrate([500, 200, 500]); } catch { /* unsupported */ } }
 }
 function fillAlarm() {
@@ -961,6 +980,7 @@ function fillAlarm() {
 }
 // 'done' acknowledges exactly the dose that raised the alarm; 'snooze' delays it; 'gone' (state changed elsewhere) writes nothing
 function hideAlarm(how) {
+  clearTimeout(alarm.testT);
   stopMusic();
   $('#alarm').classList.remove('on');
   const a = alarm.target; alarm.target = null;

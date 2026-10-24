@@ -60,6 +60,16 @@ export async function createStore(config) {
         throw e;
       }
     },
+    // new link in ONE write: the new token in, the old ones out
+    async rotateLink(pid, code, old) {
+      const u = { ['codes/' + code]: pid, [`parties/${pid}/codes/${code}`]: ts() };
+      for (const c of old) { u['codes/' + c] = null; u[`parties/${pid}/codes/${c}`] = null; }
+      try { await multi(u); } catch (e) {
+        if (e.code === 'denied' && await this.resolveCode(code).catch(() => null)) throw err('taken');
+        throw e;
+      }
+    },
+    disableLink: (pid, codes) => multi(Object.fromEntries(codes.flatMap(c => [['codes/' + c, null], [`parties/${pid}/codes/${c}`, null]]))),
     deleteCode: (pid, code) => multi({ ['codes/' + code]: null, [`parties/${pid}/codes/${code}`]: null }),
     async addFriend(pid, name, max) {
       const r = push(R(`parties/${pid}/friends`));
@@ -74,11 +84,11 @@ export async function createStore(config) {
     },
     renameFriend: (pid, fid, name) => wrap(() => set(R(`parties/${pid}/friends/${fid}/name`), name)),
     setMax: (pid, fid, max) => wrap(() => set(R(`parties/${pid}/friends/${fid}/max`), max)),
-    removeFriend(pid, party, fid) {
+    async removeFriend(pid, party, fid) {
       // the rules only allow deleting claims/members that exist, so include them only for a claimed friend
       const u = { [`parties/${pid}/friends/${fid}`]: null };
       for (const x of party.doses) if (x.friendId === fid && !x.pending) u[`parties/${pid}/doses/${x.id}`] = null;
-      const owner = party.claims[fid];
+      const owner = (await get(R(`parties/${pid}/claims/${fid}`))).val(); // fresh read right before the write (the snapshot can be stale)
       if (owner) { u[`parties/${pid}/claims/${fid}`] = null; u[`parties/${pid}/members/${owner}`] = null; }
       return multi(u);
     },
@@ -94,6 +104,11 @@ export async function createStore(config) {
     claim: (pid, fid) => multi({ [`parties/${pid}/claims/${fid}`]: uid, [`parties/${pid}/members/${uid}`]: fid }),
     // owner is passed by the app (it knows party.claims); admins release other people's claims
     release: (pid, fid, owner = uid) => multi({ [`parties/${pid}/claims/${fid}`]: null, [`parties/${pid}/members/${owner}`]: null }),
-    closeParty: pid => wrap(() => set(R(`parties/${pid}/closedAt`), ts())),
+    // closing (optionally with the link switched off) is ONE atomic write
+    closeParty(pid, disableCodes = []) {
+      const u = { [`parties/${pid}/closedAt`]: ts() };
+      for (const c of disableCodes) { u['codes/' + c] = null; u[`parties/${pid}/codes/${c}`] = null; }
+      return multi(u);
+    },
   };
 }
