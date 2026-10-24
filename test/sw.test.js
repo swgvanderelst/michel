@@ -74,5 +74,13 @@ test('sw.js: offline serves the cached page; first visit offline fails; modules 
   h.fetchImpl = async () => ({ ok: true, v: 'NEW-JS', clone() { return this; } });
   assert.equal(await ask('https://x.github.io/app.js'), 'OLD-JS'); // even online: cache-first, updates arrive with the VERSION bump
   assert.equal(await ask('https://x.github.io/logic.js'), 'NEW-JS'); // a module missing from the cache is fetched
-  assert.match(src, /michel-v4/);
+  assert.match(src, /michel-v5/);
+});
+
+test('sw.js: VERSION is bumped whenever a precached shell file changes', async () => {
+  const { shellHash } = await import('../scripts/sw-hash.mjs');
+  const now = shellHash();
+  const saved = JSON.parse(fs.readFileSync(new URL('./sw-version.json', import.meta.url), 'utf8'));
+  assert.equal(now.hash, saved.hash, 'A shell file changed: bump VERSION in sw.js, then run "node scripts/sw-hash.mjs" to update test/sw-version.json.');
+  assert.equal(now.version, saved.version, 'VERSION and test/sw-version.json disagree: run "node scripts/sw-hash.mjs".');
 });

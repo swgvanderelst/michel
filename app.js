@@ -638,7 +638,7 @@ async function joinWithCode(code, silent) {
   joinState.busy = true;
   try {
     const pid = await store.resolveCode(code);
-    if (!pid) { if (!silent) toast('Deze link werkt niet (meer)'); return false; }
+    if (!pid) { toast(DEAD_LINK); return false; } // a dead link never fails silently, also on the auto-join path
     let name = 'Feestje';
     try { const snap = await store.fetchParty(pid); if (snap) name = snap.name; } catch { /* name arrives via watch */ }
     addParty(pid, name);
@@ -649,6 +649,7 @@ async function joinWithCode(code, silent) {
   } catch (e) { fail(e); return false; } finally { joinState.busy = false; }
 }
 const joinState = { busy: false };
+const DEAD_LINK = 'Deze link werkt niet (meer). Vraag De Michel om de nieuwe link of QR.';
 
 // "Plak link": read the clipboard; if that is not possible (or holds no link) offer a paste field
 async function pasteLink() {
@@ -963,6 +964,7 @@ function alarmInfo() {
   return { st, p, f, who: f.name, why: st.last ? `${L.SIZE_NAME[st.last.size]} om ${hhmm(st.last.t)} · ${dur(nowMs() - st.last.t)} geleden` : '', party: p.name };
 }
 function showAlarm(a) {
+  unlockAudio(); // resume the AudioContext synchronously inside the tap (iOS keeps it suspended otherwise)
   closeSheet();
   alarm.target = a ? { pid: a.pid, fid: a.fid, key: a.key } : { test: true };
   fillAlarm();
@@ -1006,38 +1008,43 @@ const arpNote = (step, sub = 0) => {
   return i === 3 ? c[0] * 2 : c[i];
 };
 let ac = null, bus = null, fxSend = null, killG = null, lfoG = null;
-const music = { on: false, timer: null, next: 0, step: 0, lfo: null, beat: false, gen: 0, stopT: null };
+const music = { runs: 0, voices: 0, on: false, timer: null, next: 0, step: 0, lfo: null, beat: false, gen: 0, stopT: null };
 const MUSIC_MAX_MS = 3 * 60 * 1000; // after 3 minutes only the visual alarm stays
 const reducedMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 
+// a fresh node graph per run: stopping disconnects it (instant silence, tails included), starting never has to undo automation on a gain node (WebKit kept a half-finished setTarget ramp alive and the second alarm stayed silent)
+let irBuf = null;
+function buildGraph() {
+  killG = ac.createGain(); killG.gain.value = 0; // everything passes here; ramped in by startMusic
+  const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 150;
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -16; comp.knee.value = 6; comp.ratio.value = 14; comp.attack.value = 0.002; comp.release.value = 0.12;
+  const master = ac.createGain(); master.gain.value = 0.95;
+  killG.connect(hp); hp.connect(comp); comp.connect(master); master.connect(ac.destination);
+  bus = ac.createGain(); bus.connect(killG);
+  fxSend = ac.createGain();
+  // ping-pong delay, feedback 0.4
+  const dl = ac.createDelay(1), dr = ac.createDelay(1), fb = ac.createGain(), wet = ac.createGain();
+  dl.delayTime.value = 0.19; dr.delayTime.value = 0.19; fb.gain.value = 0.4; wet.gain.value = 0.55;
+  const pan = v => { if (!ac.createStereoPanner) return null; const p = ac.createStereoPanner(); p.pan.value = v; return p; };
+  fxSend.connect(dl); dl.connect(dr); dr.connect(fb); fb.connect(dl);
+  for (const [d, p] of [[dl, pan(-0.8)], [dr, pan(0.8)]]) { if (p) { d.connect(p); p.connect(wet); } else d.connect(wet); }
+  wet.connect(killG);
+  // procedural reverb: 2.5 s of decaying noise
+  const conv = ac.createConvolver();
+  if (!irBuf) { const len = Math.floor(ac.sampleRate * 2.5); irBuf = ac.createBuffer(2, len, ac.sampleRate); for (let c = 0; c < 2; c++) { const d = irBuf.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); } }
+  conv.buffer = irBuf;
+  const revWet = ac.createGain(); revWet.gain.value = 0.75;
+  fxSend.connect(conv); conv.connect(revWet); revWet.connect(killG);
+  lfoG = ac.createGain(); lfoG.gain.value = 14; // vibrato depth in cents
+
+}
 function unlockAudio() {
   try { if (nav.audioSession) nav.audioSession.type = 'playback'; } catch { /* unsupported */ } // plays with the silent switch on (iOS 16.4+)
   if (!ac) {
     const C = window.AudioContext || window.webkitAudioContext;
     if (!C) return;
     ac = new C();
-    killG = ac.createGain(); killG.gain.value = 0; // everything passes here: stop = instant silence, tails included
-    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 150;
-    const comp = ac.createDynamicsCompressor();
-    comp.threshold.value = -16; comp.knee.value = 6; comp.ratio.value = 14; comp.attack.value = 0.002; comp.release.value = 0.12;
-    const master = ac.createGain(); master.gain.value = 0.95;
-    killG.connect(hp); hp.connect(comp); comp.connect(master); master.connect(ac.destination);
-    bus = ac.createGain(); bus.connect(killG);
-    fxSend = ac.createGain();
-    // ping-pong delay, feedback 0.4
-    const dl = ac.createDelay(1), dr = ac.createDelay(1), fb = ac.createGain(), wet = ac.createGain();
-    dl.delayTime.value = 0.19; dr.delayTime.value = 0.19; fb.gain.value = 0.4; wet.gain.value = 0.55;
-    const pan = v => { if (!ac.createStereoPanner) return null; const p = ac.createStereoPanner(); p.pan.value = v; return p; };
-    fxSend.connect(dl); dl.connect(dr); dr.connect(fb); fb.connect(dl);
-    for (const [d, p] of [[dl, pan(-0.8)], [dr, pan(0.8)]]) { if (p) { d.connect(p); p.connect(wet); } else d.connect(wet); }
-    wet.connect(killG);
-    // procedural reverb: 2.5 s of decaying noise
-    const conv = ac.createConvolver(), len = Math.floor(ac.sampleRate * 2.5), ir = ac.createBuffer(2, len, ac.sampleRate);
-    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
-    conv.buffer = ir;
-    const revWet = ac.createGain(); revWet.gain.value = 0.75;
-    fxSend.connect(conv); conv.connect(revWet); revWet.connect(killG);
-    lfoG = ac.createGain(); lfoG.gain.value = 14; // vibrato depth in cents
   }
   if (ac.state !== 'running') ac.resume().catch(() => {});
 }
@@ -1074,6 +1081,7 @@ function voiceBleep(t) {
 }
 
 function schedStep(step, t) {
+  music.voices++;
   const bpm = bpmAt(step), sx = 60 / bpm / 4; // one 16th
   const cutoff = 500 * Math.pow(14, (step % 32) / 32); // resonant sweep up over 2 bars
   const double = step >= CAP_STEP; // at the top the arpeggio runs in 32nds
@@ -1092,12 +1100,13 @@ function pump() {
 }
 // every new alarm starts again at 138 BPM
 function startMusic(beat) {
-  if (!ac || !bus || !settings.sound || music.on) return;
-  if (ac.state !== 'running') ac.resume().catch(() => {});
+  if (!ac || !settings.sound || music.on) return;
+  if (ac.state !== 'running') ac.resume().catch(() => {}); // called synchronously from the tap
+  buildGraph();
   const t = ac.currentTime;
-  music.on = true; music.step = 0; music.next = t + 0.06; music.beat = !!beat; music.gen++;
+  music.on = true; music.runs++; music.step = 0; music.next = t + 0.06; music.beat = !!beat; music.gen++;
   clearTimeout(music.stopT); music.stopT = setTimeout(stopMusic, MUSIC_MAX_MS);
-  killG.gain.cancelScheduledValues(0); killG.gain.setValueAtTime(0, t); killG.gain.linearRampToValueAtTime(1, t + 0.05); // 50 ms ramp-in
+  killG.gain.setValueAtTime(0, t); killG.gain.linearRampToValueAtTime(1, t + 0.05); // 50 ms ramp-in
   music.lfo = ac.createOscillator(); music.lfo.frequency.value = 5.5; music.lfo.connect(lfoG); music.lfo.start(t);
   music.timer = setInterval(pump, 25);
   if (beat) { $('#alarm').classList.add('beat'); $('#alarm').classList.remove('flip'); }
@@ -1108,7 +1117,8 @@ function stopMusic() {
   $('#alarm').classList.remove('beat', 'flip');
   if (!music.on) return;
   music.on = false;
-  try { killG.gain.cancelScheduledValues(0); killG.gain.setTargetAtTime(0, ac.currentTime, 0.004); music.lfo.stop(); music.lfo.disconnect(); } catch { /* already stopped */ }
+  try { killG.disconnect(); music.lfo.stop(); music.lfo.disconnect(); } catch { /* already stopped */ }
+  killG = null; bus = null; fxSend = null; lfoG = null;
 }
 // short preview for the sound toggle
 function previewSound() { if (alarm.target) return; startMusic(false); setTimeout(() => { if (!alarm.target) stopMusic(); }, 2200); }
@@ -1160,7 +1170,7 @@ else {
     const u = new URL(location.href); u.searchParams.delete('p');
     history.replaceState(null, '', u);
     const done = ls.get('michel_linkcodes_done', []);
-    if (!linkOk) toast('Deze link werkt niet (meer)');
+    if (!linkOk) toast(DEAD_LINK);
     else if (!done.includes(linkCode)) {
       const known = parties.length;
       joinWithCode(linkCode, true).then(ok => {
@@ -1174,4 +1184,4 @@ else {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { render(); tick(); replayOutbox(); } });
   tick();
 }
-window.__michel = { get state() { return { current, parties, tab, outbox, live: [...live] }; }, tick };
+window.__michel = { get state() { return { current, parties, tab, outbox, live: [...live], audio: { on: music.on, runs: music.runs, voices: music.voices, ctx: ac ? ac.state : null, time: ac ? ac.currentTime : 0, gain: killG ? killG.gain.value : null } }; }, tick };

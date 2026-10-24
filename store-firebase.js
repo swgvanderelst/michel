@@ -88,7 +88,7 @@ export async function createStore(config) {
       // the rules only allow deleting claims/members that exist, so include them only for a claimed friend
       const u = { [`parties/${pid}/friends/${fid}`]: null };
       for (const x of party.doses) if (x.friendId === fid && !x.pending) u[`parties/${pid}/doses/${x.id}`] = null;
-      const owner = (await get(R(`parties/${pid}/claims/${fid}`))).val(); // fresh read right before the write (the snapshot can be stale)
+      const owner = await wrap(async () => (await get(R(`parties/${pid}/claims/${fid}`))).val()); // fresh read right before the write (the snapshot can be stale)
       if (owner) { u[`parties/${pid}/claims/${fid}`] = null; u[`parties/${pid}/members/${owner}`] = null; }
       return multi(u);
     },

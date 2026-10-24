@@ -259,6 +259,35 @@ try {
   assert.equal(Object.keys((await get('/parties/' + PID)).doses).length, before);
   await page.close();
 
+  // ---- test alarm three times in a row: overlay, music (graph rebuilt each run), strobe at 0.05 s per step ----
+  page = await phone('?devuid=dev-admin');
+  await splashGone(page);
+  await page.evaluate(() => { for (const d of document.querySelectorAll('#alarm.on [data-a=a-ok]')) d.click(); });
+  await click(page, '[data-tab=settings]'); await sleep(300);
+  for (let i = 1; i <= 3; i++) {
+    const before = await page.evaluate(() => window.__michel.state.audio.runs); // a real alarm may have run before
+    await page.click('[data-a=test]'); // a trusted tap, like the user's
+    await sleep(900);
+    const a1 = await page.evaluate(() => window.__michel.state.audio);
+    assert.equal(await page.$eval('#alarm', e => e.classList.contains('on')), true, 'overlay missing in run ' + i);
+    assert.equal(a1.on, true, 'music not on in run ' + i);
+    assert.equal(a1.runs, before + 1, 'run counter in run ' + i);
+    assert.equal(a1.ctx, 'running', 'AudioContext not running in run ' + i);
+    assert.ok(a1.voices > 0, 'no voices scheduled in run ' + i);
+    assert.ok(a1.gain > 0.9, 'master not ramped up in run ' + i + ': ' + a1.gain);
+    await sleep(600);
+    const a2 = await page.evaluate(() => window.__michel.state.audio);
+    assert.ok(a2.time > a1.time + 0.3, 'audio clock not advancing in run ' + i);
+    assert.ok(a2.voices > a1.voices, 'music not progressing in run ' + i);
+    const anim = await page.evaluate(() => { const an = document.querySelector('.abg').getAnimations(); return { n: an.length, running: an.every(x => x.playState === 'running'), dur: getComputedStyle(document.querySelector('.abg')).animationDuration }; });
+    assert.ok(anim.n >= 1 && anim.running, 'strobe not running in run ' + i);
+    assert.equal(anim.dur, '0.2s', 'strobe must be 0.05 s per step');
+    await page.click('#alarm [data-a=a-ok]'); await sleep(300);
+    assert.equal(await page.$eval('#alarm', e => e.classList.contains('on')), false);
+    assert.equal((await page.evaluate(() => window.__michel.state.audio)).on, false, 'music still on after closing, run ' + i);
+  }
+  await page.close();
+
   // ---- test alarm: photo strobe, runs a full 60 s on its own, then closes ----
   page = await phone('?devuid=dev-admin');
   await splashGone(page);
