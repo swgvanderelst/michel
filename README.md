@@ -1,0 +1,60 @@
+# De Michel
+
+Web-app (geen build, geen framework) om per feestje bij te houden wie wat nam en wanneer er bijgepakt mag worden.
+Vanilla ES modules; backend is Firebase Realtime Database, lokaal een dev-server zonder dependencies.
+In de app heet de admin van een feestje **De Michel**.
+
+## Lokaal draaien
+```bash
+npm install                 # alleen puppeteer-core (voor tools/)
+npm run dev                 # http://localhost:8787
+MICHEL_SEED=1 npm run dev   # met het feestje AWAKENINGS ADE 2026 (pincodes 8209 en 7815, vrienden Sanne, Joris, Fem, Daan, Bart)
+```
+- Op `localhost` / `127.0.0.1` (of met `?dev=1`) gebruikt de app altijd de dev-server en raakt de echte database nooit; `?prod=1` forceert Firebase.
+- De dev-server bewaart data in `.devdata.json` (gitignored); `DEV_PERSIST=0` zet dat uit. `MICHEL_CREATORS=uid1,uid2` dwingt de creators-lijst af (zonder: iedereen mag feestjes maken).
+- Elke browser is een eigen "telefoon": `POST /api/session` geeft een uid + geheim (in localStorage). Testhook: `?devuid=dev-admin` (het seed-feestje is van `dev-admin`, geheim `dev-admin-secret`).
+- `?safe` achter de URL simuleert de iPhone-safe-areas (voor screenshots in een desktopbrowser).
+
+## Tests
+```bash
+npm test                                      # logic, dev-server, sw en rules (parity + aanvallen)
+node --test --experimental-test-coverage      # met coverage
+node tools/smoke.mjs                          # browsertest (Edge), lokaal
+node tools/shots.mjs <map>                    # screenshots van alle schermen
+MICHEL_PIN=1234 node tools/firebase-smoke.mjs # tegen de ECHTE Firebase, pas draaien als de rules staan
+```
+`test/parity.test.js` draait dezelfde scenario's tegen de dev-server en tegen `database.rules.json`
+(via de mini rules-evaluator in `test/rules-eval.js`) en eist identieke toe-/afwijzingen.
+
+## Overstappen op Firebase
+1. Firebase-project met **Realtime Database** (europe-west1) en **Authentication > Anonymous** aan. De config staat al in `firebase-config.js`.
+2. Plak `database.rules.json` in de console (Realtime Database > Rules) en publiceer.
+   (Het bestand wordt gegenereerd door `node scripts/gen-rules.mjs`; pas dat script aan, niet het JSON-bestand.)
+3. **Wie feestjes mag maken:** zet in de console `creators/<uid>: true`. Het uid staat in de app onder OPTIES > "Jouw telefoon-ID" (en klein op het startscherm). Clients kunnen `creators` niet lezen of schrijven.
+4. Zet de map op GitHub Pages (of elke statische host). De SDK komt van `https://www.gstatic.com/firebasejs/12.0.0/`; `sw.js` zet de app, de fonts en de SDK in de offline cache (alleen op https, niet op localhost). Verhoog `VERSION` in `sw.js` bij elke release.
+
+## Zo zet je vriend het op de iPhone
+Een iPhone-app op het beginscherm heeft aparte opslag van Safari. Daarom toont Safari eerst een installatiescherm.
+1. Open de link of scan de QR (`...?p=8209`) in **Safari**. Je ziet "Zet De Michel eerst op je beginscherm".
+2. Tik op **Deel** > **Zet op beginscherm**.
+3. Open **De Michel** vanaf het beginscherm. De pincode uit de link zit al in het icoon, je komt direct in het feestje. Werkt dat niet: voer de pincode (staat groot in beeld) in de app in.
+
+## Spelregels
+**Hoe werkt het**
+- Iedereen kiest zijn eigen naam. Tik op de grote + om bij te pakken: kies 1, ½ of ¼, en de tijd (nu of eerder).
+- Na een hele gaat na 2 uur het alarm af, na een halve na 1,5 uur, na een kwart na 1 uur: INKAKKEN IS BIJPAKKEN!
+- Het alarm komt alleen als De Michel open staat.
+- Max bereikt? Dan geen alarm meer.
+- TOP = wie heeft het meest, LOG = wie nam wat wanneer.
+
+**Wie kan wat**
+- Iedereen: meedoen via link, QR of pincode, eigen naam kiezen, eigen snoepjes toevoegen en tijden aanpassen, alles bekijken.
+- (M) De Michel: feestjes aanmaken en afsluiten, vrienden toevoegen en verwijderen, max instellen, pincodes beheren, namen vrijgeven.
+
+**Installeren**
+- Open de link in Safari, tik op Deel, kies Zet op beginscherm en open De Michel vanaf je beginscherm.
+
+## Assets opnieuw maken
+- `node tools/make-icons.mjs`: iconen en opstartschermen (Edge + Anton).
+- `node tools/make-splash.mjs`: `assets/splash.jpg` (geel/zwart duotone) uit `assets/splash-source.*`. De kleurenoriginal staat in `.gitignore`.
+- `vendor/qrcode.js`: qrcode-generator 1.4.4 (MIT), ongewijzigd uit npm.

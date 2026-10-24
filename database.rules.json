@@ -1,0 +1,95 @@
+{
+  "rules": {
+    "creators": {
+      ".read": false,
+      ".write": false
+    },
+    "codes": {
+      "$code": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.isString() && newData.parent().parent().child('parties').child(newData.val()).child('admin').val() === auth.uid && !newData.parent().parent().child('parties').child(newData.val()).child('closedAt').exists() && newData.parent().parent().child('parties').child(newData.val()).child('codes').child($code).exists()) || (data.exists() && !newData.exists() && root.child('parties').child(data.val()).child('admin').val() === auth.uid && !root.child('parties').child(data.val()).child('closedAt').exists() && !newData.parent().parent().child('parties').child(data.val()).child('codes').child($code).exists()))",
+        ".validate": "$code.matches(/^[0-9]{4}$/) && newData.isString() && newData.val().matches(/^[-_A-Za-z0-9]{1,32}$/)"
+      }
+    },
+    "parties": {
+      "$pid": {
+        ".read": "auth != null",
+        ".write": "auth != null && !data.exists() && root.child('creators').child(auth.uid).val() === true && newData.child('admin').val() === auth.uid",
+        ".validate": "$pid.matches(/^[-_A-Za-z0-9]{1,32}$/) && newData.hasChildren(['name', 'admin', 'createdAt']) && (data.exists() || (!newData.child('claims').exists() && !newData.child('members').exists() && !newData.child('doses').exists() && !newData.child('closedAt').exists()))",
+        "name": {
+          ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 30"
+        },
+        "admin": {
+          ".validate": "newData.val() === auth.uid"
+        },
+        "createdAt": {
+          ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= now + 300000"
+        },
+        "closedAt": {
+          ".write": "auth != null && auth.uid === data.parent().child('admin').val() && !data.exists()",
+          ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= now + 300000"
+        },
+        "codes": {
+          "$c": {
+            ".write": "auth != null && auth.uid === root.child('parties').child($pid).child('admin').val() && !root.child('parties').child($pid).child('closedAt').exists()",
+            ".validate": "$c.matches(/^[0-9]{4}$/) && newData.isNumber() && newData.val() > 0 && newData.val() <= now + 300000 && newData.parent().parent().parent().parent().child('codes').child($c).val() === $pid"
+          }
+        },
+        "friends": {
+          "$fid": {
+            ".write": "auth != null && auth.uid === root.child('parties').child($pid).child('admin').val() && !root.child('parties').child($pid).child('closedAt').exists() && (!newData.exists() || newData.hasChildren(['name', 'createdAt']))",
+            ".validate": "$fid.matches(/^[-_A-Za-z0-9]{1,32}$/) && newData.hasChildren(['name', 'createdAt'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 14"
+            },
+            "createdAt": {
+              ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= now + 300000"
+            },
+            "max": {
+              ".validate": "newData.isNumber() && newData.val() >= 0.25 && newData.val() <= 20 && newData.val() % 0.25 === 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "doses": {
+          "$did": {
+            ".write": "auth != null && !root.child('parties').child($pid).child('closedAt').exists() && (!newData.exists() || newData.hasChildren(['friendId', 'size', 't', 'addedAt'])) && (auth.uid === root.child('parties').child($pid).child('admin').val() || ((!data.exists() || root.child('parties').child($pid).child('claims').child(data.child('friendId').val()).val() === auth.uid) && (!newData.exists() || root.child('parties').child($pid).child('claims').child(newData.child('friendId').val()).val() === auth.uid)))",
+            ".validate": "$did.matches(/^[-_A-Za-z0-9]{1,32}$/) && newData.hasChildren(['friendId', 'size', 't', 'addedAt'])",
+            "friendId": {
+              ".validate": "newData.isString() && newData.val().matches(/^[-_A-Za-z0-9]{1,32}$/) && newData.parent().parent().parent().child('friends').child(newData.val()).exists() && (!data.exists() || data.val() === newData.val())"
+            },
+            "size": {
+              ".validate": "(newData.val() === 1 || newData.val() === 0.5 || newData.val() === 0.25) && (!data.exists() || data.val() === newData.val())"
+            },
+            "t": {
+              ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= now + 300000"
+            },
+            "addedAt": {
+              ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= now + 300000 && (!data.exists() || data.val() === newData.val())"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "claims": {
+          "$fid": {
+            ".write": "auth != null && !root.child('parties').child($pid).child('closedAt').exists() && ((auth.uid === root.child('parties').child($pid).child('admin').val() && data.exists() && !newData.exists() && !newData.parent().parent().child('members').child(data.val()).exists()) || (!data.exists() && newData.val() === auth.uid && !data.parent().parent().child('members').child(auth.uid).exists() && newData.parent().parent().child('members').child(auth.uid).val() === $fid) || (data.exists() && !newData.exists() && data.val() === auth.uid && !newData.parent().parent().child('members').child(auth.uid).exists()))",
+            ".validate": "$fid.matches(/^[-_A-Za-z0-9]{1,32}$/) && newData.isString() && newData.val().matches(/^[-_A-Za-z0-9]{1,32}$/) && newData.parent().parent().child('friends').child($fid).exists()"
+          }
+        },
+        "members": {
+          "$uid": {
+            ".write": "auth != null && !root.child('parties').child($pid).child('closedAt').exists() && ((auth.uid === root.child('parties').child($pid).child('admin').val() && data.exists() && !newData.exists() && !newData.parent().parent().child('claims').child(data.val()).exists()) || ($uid === auth.uid && ((!data.exists() && newData.isString() && newData.parent().parent().child('claims').child(newData.val()).val() === auth.uid) || (data.exists() && !newData.exists() && !newData.parent().parent().child('claims').child(data.val()).exists()))))",
+            ".validate": "$uid.matches(/^[-_A-Za-z0-9]{1,32}$/) && newData.isString() && newData.val().matches(/^[-_A-Za-z0-9]{1,32}$/)"
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    }
+  }
+}
