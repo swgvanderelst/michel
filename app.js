@@ -93,7 +93,7 @@ if (!INSTALL) {
   try { ({ store } = await import('./store.js')); } catch (e) {
     console.error(e);
     $('#fatal').classList.add('on');
-    hideSplash(true);
+    setTimeout(() => hideSplash(true), Math.max(0, 3000 - performance.now())); // the 3 s minimum holds here too
     throw e;
   }
 }
@@ -488,6 +488,19 @@ function onPlus() {
 }
 
 let linkBusy = false;
+// admin link actions are one atomic write and need a live connection: offline they are refused up front (RTDB would queue them silently)
+const requireOnline = () => { if (!online || navigator.onLine === false) { toast('Geen verbinding: dit kan alleen online'); return false; } return true; };
+async function linkWrite(fn, okMsg, failMsg) {
+  if (!requireOnline() || linkBusy) return;
+  linkBusy = true; render(); // the button is disabled while the write is in flight
+  const p = Promise.resolve().then(fn);
+  let slow = false;
+  try {
+    const r = await Promise.race([p.then(() => 'ok'), new Promise(res => setTimeout(() => res('slow'), 10000))]);
+    if (r === 'slow') { slow = true; toast('Nog niet bevestigd, controleer straks bij Delen'); } else toast(okMsg);
+  } catch (err) { toast(failMsg); } finally { linkBusy = false; render(); }
+  if (slow) p.then(() => render(), () => {}); // it may still complete later: render normally then
+}
 const doseState = { min: 0, custom: '' };
 function openDose(fid) {
   const p = P(), f = p && friendOf(p, fid); if (!f) return;
@@ -516,6 +529,8 @@ function sendEntry(e, quickMs = 1500) {
   const key = e.pid + ':' + e.id;
   if (inflight.has(key)) return Promise.resolve('pending');
   inflight.add(key);
+  // persist 'sent' BEFORE the write goes out (unless the device is certainly offline): if the response is lost the server may have the dose, so it is never re-posted
+  if (!e.sent && navigator.onLine !== false && online) { e = { ...e, sent: true }; setOutbox(outbox.map(x => (x.pid === e.pid && x.id === e.id ? e : x))); }
   const done = store.addDose(e.pid, e).then(() => 'ok', err => {
     if (err && err.code === 'network') return 'pending';
     const pd = raw.get(e.pid);
@@ -538,6 +553,11 @@ async function replayOutbox() {
     let exists;
     try { exists = await store.hasDose(e.pid, e.id); } catch { continue; } // offline: try again later
     if (exists) { setOutbox(L.outboxRemove(outbox, e.pid, e.id)); render(); continue; }
+    if (e.sent) { // it may have reached the server and been deleted since: never recreate it (no zombie doses)
+      setOutbox(L.outboxRemove(outbox, e.pid, e.id)); render();
+      toast('Een snoepje is mogelijk niet opgeslagen, check je LOG');
+      continue;
+    }
     sendEntry(e, 0);
   }
 }
@@ -885,27 +905,27 @@ document.addEventListener('click', async e => {
     case 'newlink': {
       if (!isAdmin(p)) return adminOnly();
       if (p.closed) return toast('Dit feestje is afgesloten');
+      if (!requireOnline()) return;
       const pid = current, old = p.codes.slice();
       confirmSheet({ title: 'Nieuwe link maken?', text: 'De oude link en QR werken daarna niet meer. Wie al in het feestje zit, blijft erin. Deel daarna de nieuwe link of QR.', ok: 'Nieuwe link maken', onOk: async () => {
-        if (linkBusy) return;
-        linkBusy = true; render(); // the button is disabled while the write is in flight
-        try {
+        await linkWrite(async () => {
           const token = L.newToken();
           for (let i = 0; ; i++) { try { await store.rotateLink(pid, i ? L.newToken() : token, old); break; } catch (e) { if (!(e && e.code === 'taken') || i > 2) throw e; } } // ONE atomic write
-          toast('Nieuwe link gemaakt. Deel de nieuwe QR.');
-        } catch (err) { toast('Nieuwe link maken mislukt, probeer opnieuw'); } finally { linkBusy = false; render(); } } });
+        }, 'Nieuwe link gemaakt. Deel de nieuwe QR.', 'Nieuwe link maken mislukt, probeer opnieuw'); } });
       return;
     }
     case 'disablelink': {
       if (!isAdmin(p)) return adminOnly();
+      if (!requireOnline()) return;
       const pid = current, codes = p.codes.slice();
       confirmSheet({ title: 'Link uitschakelen?', text: 'Daarna werken de link en QR niet meer. Wie al in het feestje zit, blijft erin.', ok: 'Link uitschakelen', onOk: async () => {
-        try { await store.disableLink(pid, codes); toast('Link uitgeschakeld'); } catch (err) { fail(err); } } });
+        await linkWrite(() => store.disableLink(pid, codes), 'Link uitgeschakeld', 'Oeps, dat is mislukt'); } });
       return;
     }
     case 'closeparty': {
       if (!isAdmin(p)) return adminOnly();
       if (p.closed) return;
+      if (!requireOnline()) return;
       sheet(`<div class="sh-name">Feestje afsluiten?</div><div class="sh-sub">Daarna is het alleen-lezen voor iedereen: geen alarm en geen nieuwe snoepjes. Dit kan niet ongedaan worden. Link ook uitschakelen? Dan kan niemand het feestje nog openen met de oude link of QR.</div>
         <button class="big danger" data-a="closeall" style="margin-top:6px">Afsluiten en link uitschakelen</button>
         <button class="big ghost" data-a="closeonly" style="height:66px;font-size:24px">Alleen afsluiten</button>
@@ -915,10 +935,7 @@ document.addEventListener('click', async e => {
     case 'closeall': case 'closeonly': {
       const codes = d.a === 'closeall' && sheetCtx ? sheetCtx.codes : [], pid = current;
       closeSheet();
-      try {
-        await store.closeParty(pid, codes); // one atomic write: closedAt + the codes
-        toast(codes.length ? 'Feestje afgesloten, link uitgeschakeld' : 'Feestje afgesloten');
-      } catch (err) { fail(err); }
+      await linkWrite(() => store.closeParty(pid, codes), codes.length ? 'Feestje afgesloten, link uitgeschakeld' : 'Feestje afgesloten', 'Oeps, dat is mislukt');
       return;
     }
     case 'leave':

@@ -74,7 +74,7 @@ test('sw.js: offline serves the cached page; first visit offline fails; modules 
   h.fetchImpl = async () => ({ ok: true, v: 'NEW-JS', clone() { return this; } });
   assert.equal(await ask('https://x.github.io/app.js'), 'OLD-JS'); // even online: cache-first, updates arrive with the VERSION bump
   assert.equal(await ask('https://x.github.io/logic.js'), 'NEW-JS'); // a module missing from the cache is fetched
-  assert.match(src, /michel-v5/);
+  assert.match(src, /michel-v7/);
 });
 
 test('sw.js: VERSION is bumped whenever a precached shell file changes', async () => {
@@ -83,4 +83,13 @@ test('sw.js: VERSION is bumped whenever a precached shell file changes', async (
   const saved = JSON.parse(fs.readFileSync(new URL('./sw-version.json', import.meta.url), 'utf8'));
   assert.equal(now.hash, saved.hash, 'A shell file changed: bump VERSION in sw.js, then run "node scripts/sw-hash.mjs" to update test/sw-version.json.');
   assert.equal(now.version, saved.version, 'VERSION and test/sw-version.json disagree: run "node scripts/sw-hash.mjs".');
+});
+
+test('sw.js: a 5xx page response does not beat the cached shell; without a cache it is passed on', async () => {
+  const { h, ask, store } = swHarness();
+  h.fetchImpl = async () => ({ ok: false, status: 503, v: 'ERR-503', clone() { return this; } });
+  assert.equal(await ask('https://x.github.io/', 'navigate'), 'OLD-INDEX');
+  assert.equal(store.get('https://x.github.io/'), undefined); // the error page is not cached
+  store.delete('https://x.github.io/index.html');
+  assert.equal(await ask('https://x.github.io/', 'navigate'), 'ERR-503'); // first visit: nothing better to show
 });

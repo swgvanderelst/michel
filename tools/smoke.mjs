@@ -259,6 +259,56 @@ try {
   assert.equal(Object.keys((await get('/parties/' + PID)).doses).length, before);
   await page.close();
 
+  // ---- zombie dose: the POST reaches the server, the response is lost, the admin deletes the dose, the phone reconnects ----
+  page = await browser.newPage();
+  await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  await page.evaluateOnNewDocument(() => {
+    const real = window.fetch.bind(window);
+    window.fetch = async (url, opts) => {
+      const r = real(url, opts);
+      if (window.__dropDoseResponse && opts && opts.method === 'POST' && String(url).includes('/doses')) { await r; throw new TypeError('Failed to fetch'); } // delivered, but the answer never arrives
+      return r;
+    };
+    window.__dropDoseResponse = true;
+  });
+  await page.goto(`${base}/?devuid=phone-sanne-01&devsecret=${sanneSecret}`, { waitUntil: 'domcontentloaded' });
+  await splashGone(page);
+  await page.evaluate(() => { for (const d of document.querySelectorAll('#alarm.on [data-a=a-ok]')) d.click(); });
+  const zBefore = Object.keys((await get('/parties/' + PID)).doses);
+  await page.click('.plus'); await sleep(400);
+  await page.click('[data-a=dose][data-size="0.25"]'); await sleep(1800);
+  const zMid = (await get('/parties/' + PID)).doses;
+  const zId = Object.keys(zMid).find(k => !zBefore.includes(k));
+  assert.ok(zId, 'the POST must have reached the server');
+  const zEntry = (await page.evaluate(() => window.__michel.state.outbox))[0];
+  assert.equal(zEntry && zEntry.sent, true, "the outbox entry must be flagged 'sent' before the write");
+  assert.equal((await fetch(`${base}/api/parties/${PID}/doses/${zId}`, { method: 'DELETE', headers: admin })).status, 200); // the admin deletes it
+  await page.evaluate(() => { window.__dropDoseResponse = false; });
+  await page.reload({ waitUntil: 'domcontentloaded' }); // reconnect: replay
+  await page.evaluate(() => { window.__dropDoseResponse = false; });
+  await page.waitForFunction(() => /mogelijk niet opgeslagen/.test(document.getElementById('toast').textContent), { timeout: 15000 });
+  assert.equal((await get('/parties/' + PID)).doses[zId], undefined, 'zombie dose was recreated');
+  assert.equal((await page.evaluate(() => window.__michel.state.outbox)).length, 0);
+  await page.close();
+
+  // ---- admin link actions offline: refused at once, nothing written, button not stuck ----
+  page = await phone('?devuid=dev-admin');
+  await splashGone(page);
+  await page.evaluate(() => { for (const d of document.querySelectorAll('#alarm.on [data-a=a-ok]')) d.click(); });
+  const codesBefore = JSON.stringify(Object.keys((await get('/parties/' + PID)).codes || {}));
+  await click(page, '[data-tab=settings]'); await sleep(300);
+  await page.setOfflineMode(true);
+  await page.click('[data-a=newlink]'); await sleep(300);
+  assert.match(await page.$eval('#toast', e => e.textContent), /Geen verbinding: dit kan alleen online/);
+  assert.equal(await page.$('[data-a=confirm-ok]'), null, 'no confirm dialog while offline');
+  assert.equal(await page.$eval('[data-a=newlink]', e => e.disabled || e.classList.contains('off')), false, 'button stuck');
+  await page.click('[data-a=closeparty]'); await sleep(300);
+  assert.match(await page.$eval('#toast', e => e.textContent), /Geen verbinding/);
+  await page.setOfflineMode(false);
+  assert.equal(JSON.stringify(Object.keys((await get('/parties/' + PID)).codes || {})), codesBefore, 'nothing may be written');
+  assert.equal((await get('/parties/' + PID)).closedAt, undefined);
+  await page.close();
+
   // ---- test alarm three times in a row: overlay, music (graph rebuilt each run), strobe at 0.05 s per step ----
   page = await phone('?devuid=dev-admin');
   await splashGone(page);
