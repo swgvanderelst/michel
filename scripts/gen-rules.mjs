@@ -19,7 +19,8 @@ const CODE_PARTY = `${NR}.child('parties').child(newData.val())`;
 const rules = {
   rules: {
     // allow-listed creators: set manually in the console, never readable or writable by clients
-    creators: { '.read': false, '.write': false },
+    // each phone may read ONLY its own entry (to know whether to show NIEUW FEESTJE); the list itself is not readable
+    creators: { '.read': false, '.write': false, $uid: { '.read': 'auth != null && auth.uid === $uid' } },
     codes: {
       // direct get allowed, no listing: no .read on "codes" itself
       $code: {
@@ -57,8 +58,12 @@ const rules = {
         },
         friends: {
           $fid: {
-            // admin only: add, rename, max, remove; a friend must stay complete
-            '.write': `auth != null && ${ADMIN} && ${OPEN} && (!newData.exists() || newData.hasChildren(['name', 'createdAt']))`,
+            // admin: add, rename, max, remove (a friend must stay complete).
+            // anyone else: create ONE friend for themselves, only in the same write as claims/$fid = uid and members/uid = $fid, no max;
+            // renaming, max and deleting stay admin-only (the self branch needs !data.exists() and newData.exists())
+            '.write': `auth != null && ${OPEN} && ((${ADMIN} && (!newData.exists() || newData.hasChildren(['name', 'createdAt'])))`
+              + ` || (!data.exists() && newData.hasChildren(['name', 'createdAt']) && !newData.child('max').exists() && !${P}.child('members').child(auth.uid).exists()`
+              + ` && ${NEWPARTY}.child('claims').child($fid).val() === auth.uid && ${NEWPARTY}.child('members').child(auth.uid).val() === $fid))`,
             '.validate': `$fid.matches(${KEY}) && newData.hasChildren(['name', 'createdAt'])`,
             name: { '.validate': 'newData.isString() && newData.val().length >= 1 && newData.val().length <= 14' },
             createdAt: { '.validate': TIME },

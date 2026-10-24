@@ -40,7 +40,9 @@ test('rules: only allow-listed creators; the creators list is not accessible', (
   assert.equal(ok([{ path: ['creators', 'nobody'], value: true }], { uid: 'nobody' }), false);
   assert.equal(ok([{ path: ['creators', 'adm'], value: null }], { uid: 'adm' }), false);
   assert.equal(checkRead(rules, tree, ['creators'], { uid: 'adm' }), false);
-  assert.equal(checkRead(rules, tree, ['creators', 'adm'], { uid: 'adm' }), false);
+  assert.equal(checkRead(rules, tree, ['creators', 'adm'], { uid: 'adm' }), true); // a phone reads its own entry
+  assert.equal(checkRead(rules, tree, ['creators', 'adm'], { uid: 'other' }), false); // never someone else's
+  assert.equal(checkRead(rules, tree, ['creators', 'adm'], null), false);
   assert.equal(ok([{ path: ['parties', 'other-party'], value: { name: 'N', admin: 'adm', createdAt: NOW } }]), true);
 });
 
@@ -102,6 +104,11 @@ test('rules: the admin may add their own name and claim it in one atomic write; 
   const { A, U, P, ok } = world();
   assert.equal(ok([{ path: [...P, 'friends', 'fm'], value: { name: 'Michel', createdAt: NOW } }, { path: [...P, 'claims', 'fm'], value: 'adm' }, { path: [...P, 'members', 'adm'], value: 'fm' }], A), true);
   assert.equal(ok([{ path: [...P, 'claims', 'ghost'], value: 'adm' }, { path: [...P, 'members', 'adm'], value: 'ghost' }], A), false); // friend does not exist
-  assert.equal(ok([{ path: [...P, 'friends', 'fx'], value: { name: 'Sneaky', createdAt: NOW } }, { path: [...P, 'claims', 'fx'], value: 'usr2' }, { path: [...P, 'members', 'usr2'], value: 'fx' }], { uid: 'usr2' }), false); // non-admin cannot create the friend
+  assert.equal(ok([{ path: [...P, 'friends', 'fx'], value: { name: 'Sneaky', createdAt: NOW } }, { path: [...P, 'claims', 'fx'], value: 'usr2' }, { path: [...P, 'members', 'usr2'], value: 'fx' }], { uid: 'usr2' }), true); // a member may add THEMSELVES: friend + claim + member together
+  assert.equal(ok([{ path: [...P, 'friends', 'fz'], value: { name: 'Again', createdAt: NOW } }, { path: [...P, 'claims', 'fz'], value: 'usr2' }, { path: [...P, 'members', 'usr2'], value: 'fz' }], { uid: 'usr2' }), false); // one friend per phone
+  assert.equal(ok([{ path: [...P, 'friends', 'fq'], value: { name: 'Max', createdAt: NOW, max: 1 } }, { path: [...P, 'claims', 'fq'], value: 'usr3' }, { path: [...P, 'members', 'usr3'], value: 'fq' }], { uid: 'usr3' }), false); // no max on self-create
+  assert.equal(ok([{ path: [...P, 'friends', 'fr'], value: { name: 'Other', createdAt: NOW } }], { uid: 'usr3' }), false); // not without the claim
+  assert.equal(ok([{ path: [...P, 'friends', 'fs'], value: { name: 'ForSomeone', createdAt: NOW } }, { path: [...P, 'claims', 'fs'], value: 'someone-else' }, { path: [...P, 'members', 'someone-else'], value: 'fs' }], { uid: 'usr3' }), false); // not for another uid
+  assert.equal(ok([{ path: [...P, 'friends', 'f1', 'name'], value: 'Renamed' }], { uid: 'usr2' }), false); // rename stays admin-only
   assert.equal(ok([{ path: [...P, 'friends', 'fy'], value: { name: 'Two', createdAt: NOW } }, { path: [...P, 'claims', 'fy'], value: 'adm' }, { path: [...P, 'members', 'adm'], value: 'fy' }], A), false); // admin already has a claim now
 });

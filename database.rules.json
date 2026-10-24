@@ -2,7 +2,10 @@
   "rules": {
     "creators": {
       ".read": false,
-      ".write": false
+      ".write": false,
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid"
+      }
     },
     "codes": {
       "$code": {
@@ -37,7 +40,7 @@
         },
         "friends": {
           "$fid": {
-            ".write": "auth != null && auth.uid === root.child('parties').child($pid).child('admin').val() && !root.child('parties').child($pid).child('closedAt').exists() && (!newData.exists() || newData.hasChildren(['name', 'createdAt']))",
+            ".write": "auth != null && !root.child('parties').child($pid).child('closedAt').exists() && ((auth.uid === root.child('parties').child($pid).child('admin').val() && (!newData.exists() || newData.hasChildren(['name', 'createdAt']))) || (!data.exists() && newData.hasChildren(['name', 'createdAt']) && !newData.child('max').exists() && !root.child('parties').child($pid).child('members').child(auth.uid).exists() && newData.parent().parent().child('claims').child($fid).val() === auth.uid && newData.parent().parent().child('members').child(auth.uid).val() === $fid))",
             ".validate": "$fid.matches(/^[-_A-Za-z0-9]{1,32}$/) && newData.hasChildren(['name', 'createdAt'])",
             "name": {
               ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 14"

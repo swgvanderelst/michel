@@ -63,15 +63,14 @@ const mb = (on = true) => `<span class="mb ${on ? '' : 'grey'}" aria-label="Alle
 
 // ---------- environment ----------
 const nav = navigator;
-const INSTALL = L.needsInstall({
+// iOS Safari tab (not the installed app): everything works right away; a non-blocking tip offers the home-screen install
+const iosTab = L.needsInstall({
   ua: nav.userAgent, platform: nav.platform, touchPoints: nav.maxTouchPoints,
   standalone: nav.standalone, mediaStandalone: !!(window.matchMedia && matchMedia('(display-mode: standalone)').matches),
 });
-// iOS home-screen apps open the page that was added; without a manifest iOS uses the current URL (incl. ?p=PIN)
-if (/iPad|iPhone|iPod/.test(nav.userAgent) || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1)) {
-  const m = document.querySelector('link[rel="manifest"]');
-  if (m) m.remove();
-}
+// iOS has NO manifest at all (it is not in the static HTML): Add to Home Screen then uses the current URL including ?p=TOKEN. Other browsers get it injected (needed for beforeinstallprompt).
+const isIOS = /iPad|iPhone|iPod/.test(nav.userAgent) || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1);
+if (!isIOS) { const l = document.createElement('link'); l.rel = 'manifest'; l.href = 'manifest.webmanifest'; document.head.appendChild(l); }
 // the service worker only runs on real origins, never on the local dev server
 if ('serviceWorker' in nav && location.protocol === 'https:' && !['localhost', '127.0.0.1'].includes(location.hostname)) {
   nav.serviceWorker.register('sw.js').catch(() => { /* offline shell is a bonus */ });
@@ -89,7 +88,7 @@ window.addEventListener('beforeinstallprompt', e => {
 window.addEventListener('appinstalled', () => { ls.set('michel_install_hidden', true); installEvent = null; if (store) render(); });
 
 let store = null;
-if (!INSTALL) {
+{
   try { ({ store } = await import('./store.js')); } catch (e) {
     console.error(e);
     $('#fatal').classList.add('on');
@@ -119,7 +118,11 @@ const saveSettings = () => { ls.set('michel_sound', settings.sound); ls.set('mic
 // outbox: dose writes not yet acknowledged by the server (persisted, replayed on start/reconnect)
 let outbox = ls.get('michel_outbox', []);
 const setOutbox = list => { outbox = list; ls.set('michel_outbox', list); };
+// doses that were dropped from the outbox because they may not have been saved: kept until the user re-adds or dismisses them
+let lost = ls.get('michel_lost', []);
+const setLost = list => { lost = list; ls.set('michel_lost', list); };
 
+let isCreator = false; // only phones on the creators list may start a party (read from creators/<own uid>)
 const view = pid => L.mergePending(raw.get(pid) || null, outbox);
 const P = () => (current ? view(current) : null);
 const isAdmin = p => !!p && p.admin === uid;
@@ -167,6 +170,7 @@ function leaveParty(pid) {
   raw.delete(pid); live.delete(pid);
   parties = parties.filter(p => p.id !== pid);
   setOutbox(outbox.filter(e => e.pid !== pid));
+  setLost(lost.filter(l => l.pid !== pid));
   try { localStorage.removeItem('michel_cache_' + pid); } catch { /* ignore */ }
   if (current === pid) current = parties[0] ? parties[0].id : null;
   persistParties();
@@ -176,9 +180,9 @@ function leaveParty(pid) {
 }
 
 // ---------- helpers ----------
-function toast(msg, undo) {
+function toast(msg, undo, label = 'Oeps') {
   const t = $('#toast');
-  t.innerHTML = `<span>${msg}</span>${undo ? '<button data-a="undo">Oeps</button>' : ''}`;
+  t.innerHTML = `<span>${msg}</span>${undo ? `<button data-a="undo">${esc(label)}</button>` : ''}`;
   toast.undo = undo || null;
   t.classList.add('on');
   clearTimeout(toast.t);
@@ -325,8 +329,19 @@ function crewView(p) {
   }
   const me = meOf(p), now = nowMs();
   const order = p.friends.slice().sort((a, b) => (b.id === me) - (a.id === me));
-  return `<div class="pad">${installBanner()}${order.map(f => cardHtml(f, p, now)).join('')}</div>`;
+  return `<div class="pad">${iosStepCard()}${installBanner()}${lostBanner(p)}${order.map(f => cardHtml(f, p, now)).join('')}</div>`;
 }
+// iOS Safari tab: the party is visible read-only, names are only picked in the installed app (separate storage on iOS)
+const iosStepCard = () => (iosTab ? `<div class="stepcard">
+  <div class="sc-h">Stap 1 · Zet De Michel op je beginscherm</div>
+  <ol class="steps"><li><span class="n">1</span><span>Tik op <b>Deel</b> ${ICON.share} onderin Safari</span></li>
+    <li><span class="n">2</span><span>Kies <b>Zet op beginscherm</b></span></li>
+    <li><span class="n">3</span><span>Tik op <b>Voeg toe</b></span></li></ol>
+  <div class="sc-arrow" aria-hidden="true">↓ de Deel-knop zit onderin Safari</div>
+  <div class="sc-h" style="margin-top:14px">Stap 2 · Open De Michel vanaf je beginscherm en voeg je naam toe</div>
+  <button class="big" data-a="copyself" style="margin-top:12px;height:56px;font-size:22px;background:#000;color:var(--fg)">Kopieer link</button>
+  <p class="sc-note">Werkt het niet? Open De Michel en tik PLAK LINK.</p>
+</div>` : '');
 const installBanner = () => (installEvent ? `<div class="ibanner"><b>Installeer De Michel</b><button data-a="doinstall">Installeer</button><button class="x" data-a="hideinstall" aria-label="Sluiten">✕</button></div>` : '');
 
 function topView(p) {
@@ -344,9 +359,9 @@ function topView(p) {
 
 function logView(p) {
   const ds = L.sortDosesDesc(p.doses);
-  if (!ds.length) return `<div class="pad"><div class="empty"><h2>Nog niks</h2><p>Hier zie je wie wat wanneer nam.</p></div></div>`;
+  if (!ds.length) return `<div class="pad">${lostBanner(p)}<div class="empty"><h2>Nog niks</h2><p>Hier zie je wie wat wanneer nam.</p></div></div>`;
   const name = id => (friendOf(p, id) || { name: '?' }).name;
-  return `<div class="pad"><div class="nightline"><span>Totaal vanavond</span><b>${frac(L.total(ds))}</b></div>
+  return `<div class="pad">${lostBanner(p)}<div class="nightline"><span>Totaal vanavond</span><b>${frac(L.total(ds))}</b></div>
     <ul class="log" style="margin-top:-4px">${ds.map(d => `<li ${canAdd(p, d.friendId) ? `data-did="${esc(d.id)}"` : ''}><span class="t">${hhmm(d.t)}</span><span class="n">${esc(name(d.friendId))}${d.pending ? ' <span class="pend">wordt verstuurd</span>' : ''}</span><span class="s">${frac(d.size)}</span></li>`).join('')}</ul></div>`;
 }
 
@@ -410,9 +425,10 @@ function claimBuild() {
     : `<button data-a="claim" data-fid="${esc(f.id)}"><span>${esc(f.name)}</span></button>`).join('');
   return `<h1 style="font-size:84px">Wie ben<br>jij?</h1>
     <p class="lead">${admin ? 'Optioneel: ben jij zelf ook een van de vrienden?' : 'Kies je naam. Dan kun jij zelf snoepjes invoeren en krijg je alarm voor jezelf.'}</p>
-    <div class="who2 pagewho" style="margin-top:16px">${btns}</div>
-    ${p.friends.length ? '' : '<p class="note">Er zijn nog geen vrienden toegevoegd.</p>'}
-    ${admin && !me ? `<div class="lrow" style="margin-top:12px">${mb()}<button class="big outline" style="margin-top:0" data-a="addme">+ Mijn naam toevoegen</button></div>` : ''}
+    <button class="big" style="margin-top:16px" data-a="addme">+ Mijn naam toevoegen</button>
+    ${p.friends.length ? '<div class="h3">Of kies je naam</div>' : ''}
+    <div class="who2 pagewho" style="margin-top:6px">${btns}</div>
+    ${p.friends.some(f => p.claims[f.id]) ? '<p class="note">Bezet? Ben jij dit op een nieuw toestel? Vraag De Michel om je naam vrij te geven.</p>' : ''}
     <p class="note">Staat je naam er niet tussen? Vraag De Michel.</p>
     <button class="big ghost" data-a="claimskip" style="margin-top:22px;height:62px;font-size:24px">${admin ? 'Sla over' : 'Later'}</button>`;
 }
@@ -431,12 +447,16 @@ function openRename(fid) {
     <button class="big" type="submit">Opslaan</button></form>`);
   const i = $('#rn-nm'); i.focus(); i.select();
 }
-function openClaim() { pushScreen('claim', '', claimBuild, { live: true, noBack: true }); }
+function openClaim() {
+  pushScreen('claim', '', claimBuild, { live: true, noBack: true });
+  const p = P(); if (p && !p.friends.length && !meOf(p) && !p.closed) openAddMe(); // nobody in the crew yet: straight into the name input
+}
 function ensureClaimScreen() {
   const p = P();
+  if (iosTab) return; // names are only picked in the installed app
   if (!p || p.closed || meOf(p) || screens.some(s => s.key === 'claim')) return;
   if (screens.length) return; // do not interrupt another screen
-  if (isAdmin(p)) { if (!p.friends.length || ls.get('michel_skipclaim_' + p.id, false)) return; } else if (skippedClaim.has(p.id)) return;
+  if (isAdmin(p)) { if (ls.get('michel_skipclaim_' + p.id, false)) return; } else if (skippedClaim.has(p.id)) return;
   openClaim();
 }
 
@@ -448,7 +468,7 @@ function openParties() {
     return `<div class="prow ${pp.id === current ? 'on' : ''} ${d && d.closed ? 'closed' : ''}" data-a="switch" data-pid="${esc(pp.id)}"><div class="pn">${esc(pp.name)}</div><div class="ps"><span>${sub}</span>${d && d.admin === uid ? mb() : ''}</div></div>`;
   }).join('');
   sheet(`<div class="sh-name">Feestjes</div>${rows}
-    <button class="big outline" data-a="newparty" style="margin-top:14px">+ Nieuw feestje</button>
+    ${isCreator ? '<button class="big outline" data-a="newparty" style="margin-top:14px">+ Nieuw feestje</button>' : ''}
     <button class="big ghost" data-a="pastelink" style="height:66px;font-size:24px">Plak link</button>`);
 }
 
@@ -482,7 +502,8 @@ function onPlus() {
   if (isAdmin(p)) return openWho();
   const me = meOf(p);
   if (me) return openDose(me);
-  if (!p.friends.length) return openWho();
+  if (iosTab) return toast('Zet De Michel eerst op je beginscherm (stap 1) en voeg daar je naam toe');
+  if (!p.friends.length) return openClaim();
   toast('Kies eerst wie je bent');
   openClaim();
 }
@@ -544,6 +565,20 @@ function sendEntry(e, quickMs = 1500) {
   });
   return Promise.race([done, new Promise(r => setTimeout(() => r('pending'), quickMs))]);
 }
+// "Opnieuw toevoegen": the stored friend, size and time go out again under a NEW id
+function readdLost(i) {
+  const l = lost[i], p = l && view(l.pid);
+  if (!l) return;
+  if (!p || !canAdd(p, l.friendId)) return toast('Dat kan niet meer: het feestje of de vriend is er niet meer');
+  setLost(lost.filter((_, k) => k !== i));
+  const e = { pid: l.pid, id: store.newDoseId(l.pid), friendId: l.friendId, size: l.size, t: l.t, addedAt: nowMs() };
+  setOutbox(L.outboxAdd(outbox, e));
+  render();
+  sendEntry(e).then(r => { if (r === 'ok') toast('Snoepje opnieuw toegevoegd'); });
+}
+function lostBanner(p) {
+  return lost.map((l, i) => (l.pid === p.id ? `<div class="ibanner"><b>Snoepje mogelijk niet opgeslagen: ${esc((friendOf(p, l.friendId) || { name: '?' }).name)} ${frac(l.size)} om ${hhmm(l.t)}</b><button data-a="readd" data-i="${i}">Opnieuw toevoegen</button><button class="x" data-a="dismisslost" data-i="${i}" aria-label="Sluiten">✕</button></div>` : '')).join('');
+}
 // replay only after the first live snapshot of that party, and never recreate a dose the server already has (or had and lost)
 async function replayOutbox() {
   if (!store) return;
@@ -554,8 +589,11 @@ async function replayOutbox() {
     try { exists = await store.hasDose(e.pid, e.id); } catch { continue; } // offline: try again later
     if (exists) { setOutbox(L.outboxRemove(outbox, e.pid, e.id)); render(); continue; }
     if (e.sent) { // it may have reached the server and been deleted since: never recreate it (no zombie doses)
-      setOutbox(L.outboxRemove(outbox, e.pid, e.id)); render();
-      toast('Een snoepje is mogelijk niet opgeslagen, check je LOG');
+      setOutbox(L.outboxRemove(outbox, e.pid, e.id));
+      setLost([...lost, { pid: e.pid, friendId: e.friendId, size: e.size, t: e.t }]);
+      render();
+      const li = lost.length - 1;
+      toast('Een snoepje is mogelijk niet opgeslagen, check je LOG', () => readdLost(li), 'Opnieuw toevoegen');
       continue;
     }
     sendEntry(e, 0);
@@ -632,7 +670,6 @@ function qrSvg(text, px) {
 function shareBuild() {
   const p = P(); if (!p || p.closed) return null; // sharing only exists inside an open party
   const code = p.codes[0] || '', url = linkFor(p, code); // the QR always carries the main code's link; no code is shown on this screen
-  const unclaimed = isAdmin(p) && p.friends.some(f => !p.claims[f.id]);
   const nm = p.name, px = Math.max(34, Math.min(64, Math.floor(330 / (Math.max(...nameLines(nm).map(l => l.length)) * 0.5))));
   const title = `<h1 style="font-size:${px}px;line-height:.95;margin-top:0">Deel<br>${nameLines(nm).map(esc).join('<br>')}</h1>`;
   if (!code) return title + `<p class="lead">${isAdmin(p) ? 'Geen link: maak een nieuwe link (Opties)' : 'Er is geen link beschikbaar. Vraag De Michel om een nieuwe.'}</p>`;
@@ -640,8 +677,7 @@ function shareBuild() {
     <div class="qrcard" data-url="${esc(url)}">${qrSvg(url, 260)}</div>
     <button class="big ghost" data-a="qrfull" style="height:62px;font-size:24px">${ICON.expand}<span>Volledig scherm</span></button>
     <button class="big" data-a="doshare" style="margin-top:12px"><span style="font-size:25px">Deel via WhatsApp</span></button>
-    <button class="big ghost" data-a="copylink" style="height:62px;font-size:24px">Kopieer link</button>
-    ${unclaimed ? `<p class="note">Nieuwe vriend? Voeg eerst zijn naam toe ${mb()}, laat hem dan scannen.</p>` : ''}`;
+    <button class="big ghost" data-a="copylink" style="height:62px;font-size:24px">Kopieer link</button>`;
 }
 function openQrFull() {
   const p = P(); if (!p) return;
@@ -655,10 +691,10 @@ function openQrFull() {
 
 async function joinWithCode(code, silent) {
   if (joinState.busy) return false;
-  joinState.busy = true;
+  joinState.busy = true; joinState.dead = false;
   try {
     const pid = await store.resolveCode(code);
-    if (!pid) { toast(DEAD_LINK); return false; } // a dead link never fails silently, also on the auto-join path
+    if (!pid) { joinState.dead = true; toast(DEAD_LINK); return false; } // a dead link never fails silently, also on the auto-join path
     let name = 'Feestje';
     try { const snap = await store.fetchParty(pid); if (snap) name = snap.name; } catch { /* name arrives via watch */ }
     addParty(pid, name);
@@ -732,29 +768,16 @@ function rulesBuild() {
     </ul>
     <h2 class="rh">Wie kan wat</h2>
     <ul class="rl">
-      <li><b>Iedereen:</b> meedoen via de link of QR van De Michel, eigen naam kiezen, eigen snoepjes toevoegen en tijden aanpassen, alles bekijken.</li>
+      <li><b>Iedereen:</b> meedoen via de link of QR van De Michel (iedereen voegt zichzelf toe), eigen naam kiezen of toevoegen, eigen snoepjes toevoegen en tijden aanpassen, alles bekijken.</li>
       <li>${mb()} <b>De Michel:</b> feestjes aanmaken en afsluiten, vrienden toevoegen en verwijderen, max instellen, de uitnodigingslink vernieuwen, namen vrijgeven.</li>
     </ul>
-    <h2 class="rh">Installeren</h2>
-    <ul class="rl"><li>Open de link in Safari, tik op <b>Deel</b>, kies <b>Zet op beginscherm</b> en open <b>De Michel</b> vanaf je beginscherm.</li></ul>
+    <h2 class="rh">Installeren (iPhone)</h2>
+    <ul class="rl"><li><b>Stap 1:</b> tik in Safari op <b>Deel</b>, kies <b>Zet op beginscherm</b> en tik op <b>Voeg toe</b>.</li><li><b>Stap 2:</b> open <b>De Michel</b> vanaf je beginscherm: die opent meteen in dit feestje. Voeg daar je naam toe. In Safari kijk je alleen mee.</li></ul>
     <button class="big" data-a="rulesok" style="margin-top:22px">Begrepen</button>`;
 }
 function openRules() { pushScreen('rules', 'Terug', rulesBuild()); }
 
 // ---------- install screen (iOS Safari tab) ----------
-function showInstall() {
-  document.body.classList.add('install');
-  $('#install').innerHTML = `<div class="ins-in">
-    <h1>Zet De Michel eerst op je beginscherm</h1>
-    <ol class="steps">
-      <li><span class="n">1</span><span>Tik op <b>Deel</b> ${ICON.share} onderin Safari</span></li>
-      <li><span class="n">2</span><span>Kies <b>Zet op beginscherm</b></span></li>
-      <li><span class="n">3</span><span>Open <b>De Michel</b> vanaf je beginscherm</span></li>
-    </ol>
-  </div>`;
-  dataReady();
-}
-
 // ---------- actions ----------
 document.addEventListener('submit', async e => {
   if (e.target.id === 'renamef') {
@@ -770,9 +793,10 @@ document.addEventListener('submit', async e => {
     e.preventDefault();
     const input = $('#me-nm'), name = input.value.trim(), p = P();
     if (!name) { shake(input); toast('Vul een naam in'); return input.focus(); }
-    if (p && L.nameTaken(p.friends, name)) { shake(input); return toast('Die naam bestaat al'); }
+    const dupMsg = 'Die naam bestaat al: is dat jij? Kies hem dan hierboven';
+    if (p && L.nameTaken(p.friends, name)) { shake(input); return toast(dupMsg); }
     closeSheet();
-    try { await store.addFriendAndClaim(current, name); tab = 'crew'; toast('Welkom!'); } catch (err) { toast(err && err.code === 'taken' ? 'Die naam bestaat al' : failMsg(err)); }
+    try { await store.addFriendAndClaim(current, name); tab = 'crew'; toast('Welkom!'); } catch (err) { toast(err && err.code === 'taken' ? dupMsg : failMsg(err)); }
     return;
   }
   if (e.target.id !== 'addf') return;
@@ -884,8 +908,8 @@ document.addEventListener('click', async e => {
     }
     case 'claimskip': { if (isAdmin(p)) ls.set('michel_skipclaim_' + p.id, true); else skippedClaim.add(p.id); const s = screens.find(x => x.key === 'claim'); if (s) popScreen(s); return; }
     case 'rename': return openRename(d.fid);
-    case 'addme': return !isAdmin(p) ? adminOnly() : meOf(p) ? toast('Je hebt al een naam gekozen') : openAddMe();
-    case 'whoami': { skippedClaim.delete(p.id); ls.set('michel_skipclaim_' + p.id, false); return openClaim(); }
+    case 'addme': return p.closed ? toast('Dit feestje is afgesloten') : meOf(p) ? toast('Je hebt al een naam gekozen') : openAddMe();
+    case 'whoami': { if (iosTab) return toast('Voeg je naam toe in De Michel op je beginscherm'); skippedClaim.delete(p.id); ls.set('michel_skipclaim_' + p.id, false); return openClaim(); }
     case 'notme': {
       if (p.closed) return toast('Dit feestje is afgesloten');
       const me = meOf(p);
@@ -933,6 +957,7 @@ document.addEventListener('click', async e => {
       return;
     }
     case 'closeall': case 'closeonly': {
+      if (!requireOnline()) return; // re-checked at tap time, the dialog stays open; linkWrite adds the busy flag and the 10 s timeout
       const codes = d.a === 'closeall' && sheetCtx ? sheetCtx.codes : [], pid = current;
       closeSheet();
       await linkWrite(() => store.closeParty(pid, codes), codes.length ? 'Feestje afgesloten, link uitgeschakeld' : 'Feestje afgesloten', 'Oeps, dat is mislukt');
@@ -941,6 +966,9 @@ document.addEventListener('click', async e => {
     case 'leave':
       confirmSheet({ title: 'Feestje verlaten?', text: 'Het verdwijnt van deze telefoon. Met de code kom je er weer in.', ok: 'Verlaten', onOk: () => leaveParty(current) });
       return;
+    case 'readd': return readdLost(+d.i);
+    case 'dismisslost': setLost(lost.filter((_, k) => k !== +d.i)); render(); return;
+    case 'copyself': { const tok = L.normalizeCode(new URLSearchParams(location.search).get('p')); const url = L.isValidCode(tok) ? L.shareUrl(location.origin, location.pathname, tok) : location.href; toast(await copyText(url) ? 'Link gekopieerd' : esc(url)); return; }
     case 'copyid': toast(await copyText(uid) ? 'ID gekopieerd' : 'Kopiëren lukte niet'); return;
     case 'test': return showAlarm(null);
     case 'a-took': { const a = alarm.target; hideAlarm('done'); if (a && !a.test) { const pp = view(a.pid); if (pp && canAdd(pp, a.fid)) { current = a.pid; persistParties(); tab = 'crew'; render(); openDose(a.fid); } } return; }
@@ -1167,14 +1195,14 @@ function tick() {
 $('#scroll').addEventListener('scroll', e => $('#bar').classList.toggle('small', e.target.scrollTop > 60), { passive: true });
 
 // ---------- init ----------
-if (INSTALL) showInstall();
-else {
+{
   store.onOnline(v => { const was = online; online = v; barState(); if (v && !was) replayOutbox(); });
   $('.shr').innerHTML = ICON.share;
   $('.plus').innerHTML = ICON.plus;
   document.querySelectorAll('#tabs .tab').forEach(b => { b.innerHTML = ICON[b.dataset.tab] + { crew: 'Crew', top: 'Top', log: 'Log', settings: 'Opties' }[b.dataset.tab]; });
   $('#myid').addEventListener('click', async () => toast(await copyText(uid) ? 'ID gekopieerd' : 'Kopiëren lukte niet'));
   $('#myid').textContent = 'Jouw telefoon-ID: ' + uid;
+  store.isCreator().then(v => { isCreator = !!v; $('#newbtn').hidden = !isCreator; }).catch(() => {});
   for (const pp of parties) subscribe(pp.id);
   render();
   if (!current) dataReady();
@@ -1184,21 +1212,22 @@ else {
   // each ?p=PIN is auto-joined only once per phone; later launches with the same start URL just open normally
   const linkCode = L.normalizeCode(new URLSearchParams(location.search).get('p')), linkOk = L.isValidCode(linkCode);
   if (linkCode) {
-    const u = new URL(location.href); u.searchParams.delete('p');
-    history.replaceState(null, '', u);
+    if (!iosTab) { const u = new URL(location.href); u.searchParams.delete('p'); history.replaceState(null, '', u); } // in an iOS tab the token stays, so Add to Home Screen opens straight in this party
     const done = ls.get('michel_linkcodes_done', []);
-    if (!linkOk) toast(DEAD_LINK);
+    const markDone = () => ls.set('michel_linkcodes_done', [...ls.get('michel_linkcodes_done', []), linkCode]);
+    if (!linkOk) { if (!done.includes(linkCode)) { toast(DEAD_LINK); markDone(); } } // malformed: once
     else if (!done.includes(linkCode)) {
       const known = parties.length;
       joinWithCode(linkCode, true).then(ok => {
-        if (ok) ls.set('michel_linkcodes_done', [...ls.get('michel_linkcodes_done', []), linkCode]);
-        else if (!known) dataReady();
+        if (ok || joinState.dead) markDone(); // joined, or the token resolved to no party (never an offline failure): do not repeat
+        if (!ok && !known) dataReady();
       });
     }
   }
 
   setInterval(tick, 1000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { render(); tick(); replayOutbox(); } });
+  window.addEventListener('online', () => replayOutbox()); // the browser's own signal; replay is still gated on the first live snapshot per party
   tick();
 }
 window.__michel = { get state() { return { current, parties, tab, outbox, live: [...live], audio: { on: music.on, runs: music.runs, voices: music.voices, ctx: ac ? ac.state : null, time: ac ? ac.currentTime : 0, gain: killG ? killG.gain.value : null } }; }, tick };

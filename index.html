@@ -12,7 +12,6 @@
 <title>De Michel</title>
 <link rel="icon" href="icon-192.png">
 <link rel="preload" as="image" href="assets/splash.jpg">
-<link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="apple-touch-startup-image" href="assets/startup-390x844.png" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)">
 <link rel="apple-touch-startup-image" href="assets/startup-393x852.png" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3)">
@@ -48,13 +47,11 @@
   <button class="plus" data-a="plus" aria-label="Bijpakken"></button>
 </nav>
 
-<section id="install"></section>
-
 <section id="start">
   <div class="hero"><small>De</small><b>Michel</b></div>
   <p class="tag">Houd per feestje bij wie wat nam en wanneer er bijgepakt mag worden.</p>
-  <button class="big xl" data-a="newparty">Nieuw feestje</button>
-  <p class="hint">Vraag De Michel om de link of QR. Of open de link of scan de QR van De Michel opnieuw.</p>
+  <button class="big xl" data-a="newparty" id="newbtn" hidden>Nieuw feestje</button>
+  <p class="hint">Open de link of scan de QR van De Michel. Geen link? Vraag De Michel om de link of QR.</p>
   <button class="big xl outline" data-a="pastelink" style="margin-top:14px;height:84px;font-size:34px">Plak link</button>
   <button id="myid" class="myid"></button>
 </section>

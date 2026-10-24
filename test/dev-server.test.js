@@ -383,7 +383,13 @@ test('dose POST: a missing or invalid friendId is a 400 before the permission ch
 test('admin adds their own name and claims it atomically; others cannot', async () => {
   const id = await party();
   const f = `/api/parties/${id}/friends`;
-  assert.equal((await call('mallory-1', 'POST', f, { name: 'Hack', claim: true })).status, 403);
+  const self = await call('mallory-1', 'POST', f, { name: 'Mallory', claim: true });
+  assert.equal(self.status, 201); // a member adds THEMSELVES
+  assert.equal((await call('admin-1', 'GET', '/api/parties/' + id)).body.claims[self.body.id], 'mallory-1');
+  assert.equal((await call('mallory-1', 'POST', f, { name: 'Second', claim: true })).status, 403); // one per phone
+  assert.equal((await call('mallory-2', 'POST', f, { name: 'NoClaim' })).status, 403); // without the claim
+  assert.equal((await call('mallory-2', 'POST', f, { name: 'WithMax', claim: true, max: 1 })).status, 403); // no max
+  assert.equal((await call('mallory-2', 'POST', f, { name: 'mallory', claim: true })).status, 409); // duplicate name
   const r = await call('admin-1', 'POST', f, { name: 'Michel', claim: true });
   assert.equal(r.status, 201);
   const p = (await call('admin-1', 'GET', '/api/parties/' + id)).body;
@@ -391,7 +397,7 @@ test('admin adds their own name and claims it atomically; others cannot', async 
   assert.equal(p.members['admin-1'], r.body.id);
   const again = await call('admin-1', 'POST', f, { name: 'Twee', claim: true });
   assert.equal(again.status, 403); // already claimed: nothing is created
-  assert.equal(Object.keys((await call('admin-1', 'GET', '/api/parties/' + id)).body.friends).length, 1);
+  assert.equal(Object.keys((await call('admin-1', 'GET', '/api/parties/' + id)).body.friends).length, 2); // Mallory + Michel; the refused ones created nothing
   assert.equal((await call('admin-1', 'POST', f, { name: 'Zonder' })).status, 201); // a plain add still works
   assert.equal((await call('admin-1', 'POST', f, { name: 'Bad', claim: 'yes' })).status, 201); // only literal true claims
 });
@@ -445,4 +451,16 @@ test('closing can switch the link off in the same step; a closed party can still
   assert.equal((await call('mallory-1', 'DELETE', `/api/parties/${id2}/codes`)).status, 403);
   assert.equal((await call('admin-1', 'DELETE', `/api/parties/${id2}/codes`)).status, 200); // "Link uitschakelen"
   assert.equal((await call('bob-0001', 'GET', '/api/codes/TokCls2AAAAa')).status, 404);
+});
+
+test('creators/me: a phone sees only its own creator status', async () => {
+  const s = await startServer({ port: 0, creators: ['allowed-1'], now: () => NOW });
+  const b = `http://localhost:${s.port}`;
+  const session = async uid => (await (await fetch(b + '/api/session', { method: 'POST', body: JSON.stringify({ uid }) })).json()).secret;
+  const me = async (uid, secret) => (await (await fetch(b + '/api/creators/me', { headers: { 'x-uid': uid, 'x-secret': secret } })).json()).creator;
+  assert.equal(await me('allowed-1', await session('allowed-1')), true);
+  assert.equal(await me('stranger-1', await session('stranger-1')), false);
+  assert.equal((await fetch(b + '/api/creators/me')).status, 401);
+  assert.equal((await fetch(b + '/api/creators/allowed-1', { headers: { 'x-uid': 'stranger-1', 'x-secret': await session('stranger-2') } })).status, 401); // no way to ask about others
+  await s.close();
 });

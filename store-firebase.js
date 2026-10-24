@@ -70,6 +70,7 @@ export async function createStore(config) {
       }
     },
     disableLink: (pid, codes) => multi(Object.fromEntries(codes.flatMap(c => [['codes/' + c, null], [`parties/${pid}/codes/${c}`, null]]))),
+    isCreator: () => get(R(`creators/${uid}`)).then(s => s.val() === true, () => false), // reads only its own entry (the rules allow nothing else)
     deleteCode: (pid, code) => multi({ ['codes/' + code]: null, [`parties/${pid}/codes/${code}`]: null }),
     async addFriend(pid, name, max) {
       const r = push(R(`parties/${pid}/friends`));

@@ -17,6 +17,7 @@ async function phone(query, { ua } = {}) {
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
   if (ua) await page.setUserAgent(ua);
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
+  page.on('error', e => console.log('PAGE CRASH', e.message)); // a renderer crash would explain 'detached frame' flakes
   page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text() + ' ' + (m.location().url || '')); });
   page.on('response', r => { if (r.status() >= 400 && !r.url().includes('/api/')) errors.push('http ' + r.status() + ' ' + r.url()); });
   await page.goto(base + '/' + query, { waitUntil: 'domcontentloaded' });
@@ -289,6 +290,16 @@ try {
   await page.waitForFunction(() => /mogelijk niet opgeslagen/.test(document.getElementById('toast').textContent), { timeout: 15000 });
   assert.equal((await get('/parties/' + PID)).doses[zId], undefined, 'zombie dose was recreated');
   assert.equal((await page.evaluate(() => window.__michel.state.outbox)).length, 0);
+  // the warning is actionable: the banner keeps the data until "Opnieuw toevoegen" re-adds it under a NEW id
+  assert.equal(await page.$('.ibanner [data-a=readd]') !== null, true, 'no re-add banner');
+  await page.evaluate(() => { window.__dropDoseResponse = false; });
+  await splashGone(page); // the cold-start splash covers the page for 3 s after the reload
+  await page.click('.ibanner [data-a=readd]'); await sleep(1500);
+  const zAfter = (await get('/parties/' + PID)).doses;
+  const readded = Object.entries(zAfter).find(([k, d]) => !zBefore.includes(k) && k !== zId);
+  assert.ok(readded, 'the dose was not re-added');
+  assert.equal(readded[1].t, zEntry.t); assert.equal(readded[1].size, zEntry.size); assert.equal(readded[1].friendId, zEntry.friendId);
+  assert.equal(await page.$('.ibanner [data-a=readd]'), null, 'banner stays after re-adding');
   await page.close();
 
   // ---- admin link actions offline: refused at once, nothing written, button not stuck ----
@@ -307,6 +318,16 @@ try {
   await page.setOfflineMode(false);
   assert.equal(JSON.stringify(Object.keys((await get('/parties/' + PID)).codes || {})), codesBefore, 'nothing may be written');
   assert.equal((await get('/parties/' + PID)).closedAt, undefined);
+  await page.close();
+
+  // ---- a dead start-URL token toasts only once ----
+  const dead = 'DeadTokenAbc1234';
+  page = await phone('?devuid=dev-admin&p=' + dead);
+  await page.waitForFunction(() => /werkt niet/.test(document.getElementById('toast').textContent), { timeout: 15000 });
+  await page.close();
+  page = await phone('?devuid=dev-admin&p=' + dead);
+  await splashGone(page);
+  assert.doesNotMatch(await page.$eval('#toast', e => e.textContent), /werkt niet/);
   await page.close();
 
   // ---- test alarm three times in a row: overlay, music (graph rebuilt each run), strobe at 0.05 s per step ----
@@ -352,16 +373,54 @@ try {
   assert.equal(await page.$eval('#alarm', e => e.classList.contains('on')), false, 'test alarm did not close after 60 s');
   await page.close();
 
-  // ---- install screen: iPhone Safari tab (not standalone) ----
+  // ---- iPhone Safari tab: joined read-only, step card, NO claim UI; ?p= stays for Add to Home Screen ----
   const iphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
-  page = await phone(`?p=${CODE}`, { ua: iphone });
-  await splashGone(page);
-  assert.match(await page.$eval('#install', e => e.textContent), /beginscherm/i);
-  assert.equal(await page.$('#install .code'), null); // no code on the install screen
-  assert.equal(await page.evaluate(() => location.search), `?p=${CODE}`); // the link token stays in the URL
-  assert.equal(await page.$('link[rel=manifest]'), null); // iOS uses the current URL for the home-screen icon
-  assert.equal(await page.$eval('[data-a=newparty]', e => getComputedStyle(e.closest('#start')).display), 'none');
-  await page.close();
+  const tokenNow = Object.keys((await get('/parties/' + PID)).codes || {})[0];
+  const newIos = async (standalone) => {
+    const ctx = await browser.createBrowserContext(); // a phone that never joined anything
+    const pg = await ctx.newPage();
+    await pg.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await pg.setUserAgent(iphone);
+    if (standalone) await pg.evaluateOnNewDocument(() => Object.defineProperty(navigator, 'standalone', { value: true }));
+    pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
+    await pg.goto(`${base}/?p=${tokenNow}`, { waitUntil: 'domcontentloaded' });
+    await splashGone(pg);
+    return { pg, ctx };
+  };
+  {
+    const { pg, ctx } = await newIos(false);
+    assert.equal(await pg.$('link[rel=manifest]'), null); // iOS: no manifest at all, so Add to Home Screen uses the current URL (with ?p=)
+    assert.equal(await pg.evaluate(() => location.search), `?p=${tokenNow}`); // the token stays in an iOS tab
+    assert.equal((await pg.evaluate(() => window.__michel.state)).parties.length, 1); // joined: in the party
+    assert.equal(await pg.$('.screen'), null, 'no claim screen in a Safari tab');
+    assert.equal(await pg.$('[data-a=addme]'), null);
+    assert.equal(await pg.$('[data-a=claim]'), null);
+    assert.equal(await pg.$('.stepcard') !== null, true, 'step card missing');
+    assert.match(await pg.$eval('.stepcard', e => e.textContent), /Stap 1[\s\S]*Stap 2/);
+    assert.equal(await pg.$('.card[data-f]') !== null, true, 'the crew must be visible read-only');
+    await pg.evaluate(() => { for (const d of document.querySelectorAll('#alarm.on [data-a=a-ok]')) d.click(); });
+    await pg.click('.plus'); await sleep(300);
+    assert.match(await pg.$eval('#toast', e => e.textContent), /beginscherm/);
+    assert.equal(await pg.$('.screen'), null);
+    await pg.close(); await ctx.close();
+  }
+  // ---- the installed app (standalone): auto-join, then WIE BEN JIJ? with + MIJN NAAM TOEVOEGEN on top; a member adds themselves ----
+  {
+    const { pg, ctx } = await newIos(true);
+    assert.equal(await pg.evaluate(() => location.search), ''); // the standalone app strips the token after joining
+    assert.match(await pg.$eval('.screen .scr', e => e.textContent), /Wie ben/i);
+    assert.equal(await pg.$eval('.screen .scr', e => e.querySelector('[data-a=addme]') === e.querySelector('button')), true, 'addme must come first');
+    assert.match(await pg.$eval('.screen .scr', e => e.textContent), /nieuw toestel/); // BEZET hint for claimed names
+    await pg.evaluate(() => { for (const d of document.querySelectorAll('#alarm.on [data-a=a-ok]')) d.click(); });
+    await pg.click('[data-a=addme]'); await sleep(400);
+    await pg.type('#me-nm', 'Selfie');
+    await pg.keyboard.press('Enter'); await sleep(1200);
+    const sp = await get('/parties/' + PID);
+    const sid = Object.entries(sp.friends).find(([, f]) => f.name === 'Selfie');
+    assert.ok(sid, 'self-added friend missing');
+    assert.ok(sp.claims[sid[0]] && sp.members[sp.claims[sid[0]]] === sid[0], 'self-add must claim in the same step');
+    await pg.close(); await ctx.close();
+  }
 
   // ---- splash: visible for at least 3 s, gone within about 5.5 s ----
   page = await phone('?devuid=dev-admin');

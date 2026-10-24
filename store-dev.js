@@ -75,6 +75,7 @@ export async function createStore() {
     addCode: (pid, code) => api('POST', `/parties/${pid}/codes`, { code }),
     rotateLink: (pid, code, old) => api('POST', `/parties/${pid}/codes/rotate`, { code, old }),
     disableLink: pid => api('DELETE', `/parties/${pid}/codes`),
+    async isCreator() { const r = await api('GET', '/creators/me'); return !!(r && r.creator); },
     deleteCode: (pid, code) => api('DELETE', `/parties/${pid}/codes/${code}`),
     async addFriend(pid, name, max) {
       const r = await api('POST', `/parties/${pid}/friends`, { name, ...(max != null ? { max } : {}) });

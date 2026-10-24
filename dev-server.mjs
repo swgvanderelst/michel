@@ -88,6 +88,7 @@ export function startServer({ port = 8787, host = '127.0.0.1', persistFile = nul
 const checkStamp = body => { if ('createdAt' in body && !okTime(body.createdAt, now())) throw bad('createdAt'); };
 
   function api(method, parts, uid, body) {
+    if (parts[0] === 'creators' && parts[1] === 'me' && parts.length === 2 && method === 'GET') return [200, { creator: !creatorSet || creatorSet.has(uid) }]; // own entry only, like the rules
     if (parts[0] === 'codes' && parts.length === 2 && method === 'GET') {
       const pid = db.codes[parts[1]];
       if (!pid) throw new HttpError(404, 'unknown code');
@@ -198,9 +199,10 @@ const checkStamp = body => { if ('createdAt' in body && !okTime(body.createdAt, 
 
     if (rest[0] === 'friends') {
       if (rest.length === 1 && method === 'POST') {
-        needAdmin(p, uid); needOpen(p);
+        needOpen(p);
         onlyKeys(body, ['name', 'createdAt', 'max', 'claim']);
-        if (body.claim === true && p.members?.[uid]) throw deny('already claimed'); // admin adds their own name AND claims it, atomically
+        if (p.admin !== uid && (body.claim !== true || body.max != null)) throw deny('members may only add themselves, without max'); // one self-added friend per phone
+        if (body.claim === true && p.members?.[uid]) throw deny('already claimed'); // own name AND claim, atomically
         if (!isStr(body.name, 1, 14)) throw bad('name');
         if (nameTaken(p, body.name)) throw new HttpError(409, 'name taken');
         checkStamp(body);

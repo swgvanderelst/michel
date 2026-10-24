@@ -1,9 +1,8 @@
-// Offline app shell, one generation per VERSION (bump it on every release).
-// Navigations / index.html: network with a 2.5 s timeout, then the cached copy (the fetch keeps refreshing the cache).
-// Same-origin js/css modules: cache-first from the generation filled at install, so index and modules never mix.
-// Everything else (icons, fonts, pinned SDK): cache-first.
-const VERSION = 'michel-v7';
-const NAV_TIMEOUT_MS = self.MICHEL_NAV_TIMEOUT_MS || 2500; // slow network: serve the cached shell after this long
+// Offline app shell, one generation per VERSION (bump it on every release; test/sw-version.json guards that).
+// Everything is cache-first from the generation filled at install (index.html, modules, icons, fonts, pinned SDK), so the HTML and the
+// JS of one launch always belong together. A new release is picked up when the new worker installs a fresh generation; nothing is
+// refreshed into the active one. A first visit (nothing cached) goes to the network and caches successful responses only.
+const VERSION = 'michel-v13';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'logic.js', 'store.js', 'store-dev.js', 'store-firebase.js', 'firebase-config.js',
   'vendor/qrcode.js', 'manifest.webmanifest', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'assets/splash.jpg'];
 const SDK = 'https://www.gstatic.com/firebasejs/12.0.0/';
@@ -36,18 +35,6 @@ self.addEventListener('fetch', e => {
   if (same && url.pathname.includes('/api/')) return;
   e.respondWith((async () => {
     const c = await caches.open(VERSION);
-    const isPage = same && (req.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('/index.html'));
-    if (isPage) {
-      const cached = await c.match(req, { ignoreSearch: true }) || await c.match('index.html');
-      const net = fetch(req).then(r => { if (r.ok) c.put(req, r.clone()); return r; });
-      if (!cached) return net; // first visit: nothing to fall back on
-      net.catch(() => {}); // a failed background refresh is fine
-      const timer = new Promise(r => setTimeout(() => r(null), NAV_TIMEOUT_MS));
-      const winner = await Promise.race([net.catch(() => null), timer]);
-      if (winner && winner.ok) return winner; // a 5xx must not beat the cached shell
-      e.waitUntil(net.catch(() => {})); // timer won (or offline): serve the cache, let the fetch finish updating it
-      return cached;
-    }
     const hit = await c.match(req, { ignoreSearch: same }); // ?p=TOKEN must still hit the cached shell
     if (hit) return hit;
     try {

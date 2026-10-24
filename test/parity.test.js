@@ -31,7 +31,7 @@ function toWrites(op, a, tree, who) {
       return [{ path: [...P, 'friends', a.f], value: v }];
     }
     case 'setMax': return [{ path: [...P, 'friends', a.f, 'max'], value: a.max }];
-    case 'addMe': return [{ path: [...P, 'friends', a.f], value: { name: a.name, createdAt: NOW } }, { path: [...P, 'claims', a.f], value: uid }, { path: [...P, 'members', uid], value: a.f }];
+    case 'addMe': return [{ path: [...P, 'friends', a.f], value: { name: a.name, createdAt: NOW, ...(a.max !== undefined ? { max: a.max } : {}) } }, { path: [...P, 'claims', a.f], value: uid }, { path: [...P, 'members', uid], value: a.f }];
     case 'rotate': return [{ path: ['codes', a.code], value: a.pid ?? PID }, { path: [...P, 'codes', a.code], value: NOW }, ...a.old.flatMap(c => [{ path: ['codes', c], value: null }, { path: [...P, 'codes', c], value: null }])];
     case 'closeDisable': return [{ path: [...P, 'closedAt'], value: NOW }, ...a.codes.flatMap(c => [{ path: ['codes', c], value: null }, { path: [...P, 'codes', c], value: null }])];
     case 'disableAll': return a.codes.flatMap(c => [{ path: ['codes', c], value: null }, { path: [...P, 'codes', c], value: null }]);
@@ -71,7 +71,7 @@ function toHttp(op, a, ids) {
     case 'addCode': return ['POST', `${base}/codes`, { code: a.code, createdAt: NOW }];
     case 'addFriend': return ['POST', `${base}/friends`, { name: a.name, createdAt: NOW, ...(a.max !== undefined ? { max: a.max } : {}) }, 'f:' + a.f];
     case 'setMax': return ['PATCH', `${base}/friends/${fid(a.f)}`, { max: a.max }];
-    case 'addMe': return ['POST', `${base}/friends`, { name: a.name, claim: true }, 'f:' + a.f];
+    case 'addMe': return ['POST', `${base}/friends`, { name: a.name, claim: true, ...(a.max !== undefined ? { max: a.max } : {}) }, 'f:' + a.f];
     case 'rotate': return ['POST', `${base}/codes/rotate`, { code: a.code, old: a.old }];
     case 'closeDisable': return ['POST', `${base}/close`, { disableLink: true }];
     case 'disableAll': return ['DELETE', `${base}/codes`];
@@ -220,7 +220,14 @@ test('parity: doses, validation, own-friend only, claims', async () => {
     ['admin', 'addFriend', { f: 'f3', name: 'Daan' }, 'ok'],
     ['admin', 'delClaimOnly', { f: 'f3' }, 'deny'], // deleting a claim that does not exist is rejected by both
     ['admin', 'removeFriend', { f: 'f3' }, 'ok'], // unclaimed friend: only the friend path
-    ['alice', 'addMe', { f: 'f8', name: 'Hack' }, 'deny'], // non-admin cannot add a friend, claim or not
+    ['alice', 'addMe', { f: 'f8', name: 'Alice' }, 'ok'], // alice has no claim any more: she may add herself
+    ['carol', 'addMe', { f: 'f12', name: 'Carol', max: 1 }, 'deny'], // a member cannot set max
+    ['carol', 'addMe', { f: 'f12', name: 'Carol' }, 'ok'], // a member adds themselves: friend + claim + member in one write
+    ['carol', 'addMe', { f: 'f13', name: 'Carol2' }, 'deny'], // a second self-add by the same phone
+    ['carol', 'addFriend', { f: 'f14', name: 'Other' }, 'deny'], // adding without the claim
+    ['carol', 'rename', { f: 'f12', name: 'Carolien' }, 'deny'], // rename stays admin-only
+    ['carol', 'removeFriend', { f: 'f12' }, 'deny'], // so does delete
+    ['carol', 'setMax', { f: 'f12', max: 2 }, 'deny'], // and max
     ['admin', 'addMe', { f: 'f9', name: 'Michel' }, 'ok'], // admin: own name + claim + member in one atomic write
     ['admin', 'addMe', { f: 'f10', name: 'Twee' }, 'deny'], // the admin already has a claim in this party
     ['admin', 'addDose', { d: 'dm', f: 'f9' }, 'ok'],

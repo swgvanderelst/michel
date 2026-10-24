@@ -387,3 +387,15 @@ ol.steps svg{display:inline-block;width:20px;height:20px;vertical-align:-4px;col
 .alarm .atext{align-self:stretch;overflow:hidden}
 .alarm h1{font-size:min(16vw,64px)}
 .alarm .who{font-size:min(21vw,88px);padding:6px 14px 0;overflow-wrap:normal;white-space:nowrap;max-width:100%}
+
+/* iOS Safari tab: step card (names are only picked in the installed app) */
+.stepcard{background:var(--fg);color:#000;border-radius:26px;padding:18px 18px 16px;margin-bottom:14px}
+.stepcard .sc-h{font-family:var(--disp);font-size:28px;line-height:1;text-transform:uppercase}
+.stepcard .steps li{color:#000;border-bottom-color:rgba(0,0,0,.2);font-size:17px;padding:8px 0}
+.stepcard .steps .n{background:#000;color:var(--fg);width:36px;height:36px;font-size:22px}
+.stepcard .steps b{color:#000}
+.stepcard .steps svg{color:#000}
+.stepcard .sc-arrow{font-family:var(--disp);font-size:20px;text-transform:uppercase;margin-top:6px;animation:bob 1.4s ease-in-out infinite}
+.stepcard .sc-note{font-size:14px;font-weight:700;margin-top:10px}
+@keyframes bob{50%{transform:translateY(5px)}}
+@media (prefers-reduced-motion:reduce){.stepcard .sc-arrow{animation:none}}

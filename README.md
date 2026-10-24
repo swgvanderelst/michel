@@ -37,11 +37,12 @@ MICHEL_LINK='https://…/?p=TOKEN' node tools/firebase-smoke.mjs # tegen de ECHT
 ## Meedoen
 Geen pincodes: iedereen komt binnen met de **link** of door de **QR** op de telefoon van De Michel te scannen (DELEN). De uitnodiging is een lange willekeurige code (12 tekens) in de link; niemand typt hem. De Michel kan in OPTIES een **nieuwe link maken** (de oude link en QR werken dan niet meer) en bij afsluiten de link ook uitschakelen. Wie de link kwijt is, tikt op **Plak link** (leest het klembord).
 
-## Zo zet je vriend het op de iPhone
-Een iPhone-app op het beginscherm heeft aparte opslag van Safari. Daarom toont Safari eerst een installatiescherm.
-1. Open de link of scan de QR (`...?p=AbCdEf123456`) in **Safari**. Je ziet "Zet De Michel eerst op je beginscherm".
-2. Tik op **Deel** > **Zet op beginscherm**.
-3. Open **De Michel** vanaf het beginscherm. De link zit al in het icoon, je komt direct in het feestje. Werkt dat niet: open de link of scan de QR opnieuw, of tik in de app op **Plak link**.
+## Meedoen en installeren (iPhone)
+De link of QR zet je meteen in het feestje, in elke browser. Wat je daarna ziet:
+- **Safari op de iPhone (tabblad):** je kijkt mee (titel, crew, TOP, LOG) maar kiest nog geen naam. Een grote stapkaart zegt: **Stap 1** zet De Michel op je beginscherm (Deel, Zet op beginscherm, Voeg toe). **Stap 2** open De Michel vanaf je beginscherm en voeg je naam toe. Een app op het beginscherm heeft op iOS aparte opslag, daarom wordt de naam pas daar gekozen (zo ontstaat geen "Bezet" door een Safari-sessie).
+- **De app op het beginscherm:** opent direct in het feestje (op iOS is er bewust geen manifest, dus de link met `?p=` blijft het startadres), neemt je op en toont **Wie ben jij?** met bovenaan **+ Mijn naam toevoegen**; bestaande vrije namen staan eronder. Komt de app toch zonder feestje open, tik dan op **Plak link**.
+- **Android, desktop of iOS in de app:** direct meedoen en **Wie ben jij?**; een installatiebanner is niet blokkerend.
+Staat je naam als **Bezet** (nieuw toestel), vraag De Michel om hem vrij te geven (Opties > Gekozen namen).
 
 ## Spelregels
 **Hoe werkt het**
@@ -53,11 +54,12 @@ Een iPhone-app op het beginscherm heeft aparte opslag van Safari. Daarom toont S
 - TOP = wie heeft het meest, LOG = wie nam wat wanneer.
 
 **Wie kan wat**
-- Iedereen: meedoen via de link of QR van De Michel, eigen naam kiezen, eigen snoepjes toevoegen en tijden aanpassen, alles bekijken.
+- Iedereen voegt zichzelf toe via de link. Iedereen: meedoen via de link of QR van De Michel, eigen naam kiezen of toevoegen, eigen snoepjes toevoegen en tijden aanpassen, alles bekijken.
 - (M) De Michel: feestjes aanmaken en afsluiten, vrienden toevoegen en verwijderen, max instellen, de uitnodigingslink vernieuwen, namen vrijgeven.
 
-**Installeren**
-- Open de link in Safari, tik op Deel, kies Zet op beginscherm en open De Michel vanaf je beginscherm.
+**Installeren (iPhone)**
+- Stap 1: tik in Safari op Deel, kies Zet op beginscherm en tik op Voeg toe.
+- Stap 2: open De Michel vanaf je beginscherm (die opent meteen in dit feestje) en voeg daar je naam toe. In Safari kijk je alleen mee.
 
 ## Opstartscherm
 De splash (geel/zwart foto, voortgangsbalk) staat minimaal 3 s in beeld en blijft tot de eerste data binnen is, maximaal 5 s; daarna 200 ms fade. Alleen bij een koude start, niet bij terugkeren uit de achtergrond.
