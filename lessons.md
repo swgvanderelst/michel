@@ -18,3 +18,7 @@
 - Rules only allow deleting claims/members that exist: build multi-path deletes from the current snapshot, never blindly (removing an unclaimed friend failed on real Firebase).
 - Falsy trap: code order 0 (main code) is falsy; test `=== undefined`, not `!value`.
 - Windows worktrees check files out with CRLF: patch scripts must normalise line endings.
+
+- iOS "Zet op beginscherm" uses the manifest start_url if a static <link rel=manifest> exists, so the party in ?p= gets lost. Keep the manifest out of the static HTML on iOS.
+- Changing the join-code format orphans existing links (?p=8209 became "invalid"). Migrate old codes or tell the admin to use "Nieuwe link maken".
+- WhatsApp drops navigator.share({url}) when text is present, so put the link inside the text.
