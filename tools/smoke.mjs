@@ -50,8 +50,22 @@ try {
   assert.equal(doses[0][1].friendId, sanne);
   assert.ok(Math.abs(doses[0][1].t - (Date.now() - 15 * 60000)) < 20000);
   assert.match(doses[0][0], /^[-_A-Za-z0-9]{1,32}$/); // client-chosen id is key-safe
-  await page.evaluate(() => document.querySelector('.card[data-f]:not(:first-child)').click()); await sleep(500);
+  await page.evaluate(() => [...document.querySelectorAll('.card[data-f]')].find(c => !c.querySelector('.you')).click()); await sleep(500);
   assert.equal(await page.$('[data-a=adddose]'), null); // other cards are view-only
+  // ---- personal plan: no max, no plan; with max and end it lists moments and stops at the cutoff ----
+  await page.evaluate(() => document.querySelector('.card .you').closest('.card').click()); await sleep(400); // own card: dose sheet
+  await click(page, '[data-a=detail]'); await sleep(600);
+  await click(page, '.screen [data-a=plan]'); await sleep(500);
+  assert.match(await page.$eval('#stack > .screen:last-child .scr', e => e.textContent), /Stel eerst je max in/);
+  await click(page, '[data-a=plan-maxup]'); await sleep(200); await click(page, '[data-a=plan-maxup]'); await sleep(200); // 1 then 1 1/4
+  assert.match(await page.$eval('#stack > .screen:last-child .scr', e => e.textContent), /Vul het einde/);
+  await page.evaluate(() => { const i = document.getElementById('pl-end'); const d = new Date(Date.now() + 8 * 3600000); i.value = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); i.dispatchEvent(new Event('change', { bubbles: true })); });
+  await sleep(300);
+  assert.equal((await page.$$('.plan-row')).length >= 1, true, 'plan rows missing');
+  assert.equal((await page.$$('.plan-row.next')).length, 1);
+  assert.match(await page.$eval('#stack > .screen:last-child .scr', e => e.textContent), /Plan stopt om \d\d:\d\d \(laatste moment\)/);
+  await click(page, '[data-a=back]'); await sleep(400); await click(page, '[data-a=back]'); await sleep(400);
+  assert.match(await page.$eval('#view', e => e.textContent), /Volgens plan: ± \d\d:\d\d/); // the line on the own card
   sanneSecret = await page.evaluate(() => localStorage.getItem('michel_dev_secret')); // storage is shared between pages: keep it for later
   await page.close();
 
@@ -63,6 +77,13 @@ try {
   const joris = await friendId('Joris');
   await fetch(`${base}/api/parties/${PID}/doses`, { method: 'POST', headers: admin, body: JSON.stringify({ friendId: joris, size: 0.5, t: Date.now() - 20 * 60000 }) });
   await sleep(600);
+  // ---- crew order: due first (longest overdue), then wait (least left), then none, max last; the own card is not pinned ----
+  {
+    const names = await page.$$eval('#view .card[data-f] .name', els => els.map(e => e.textContent.replace(/JIJ|DE MICHEL/, '').trim()));
+    const kinds = await page.$$eval('#view .card[data-f]', els => els.map(e => e.dataset.k));
+    const rank = { due: 0, wait: 1, none: 2, max: 3 };
+    assert.deepEqual(kinds.slice().sort((x, y) => rank[x] - rank[y]), kinds, 'cards are grouped due, wait, none, max: ' + kinds + ' ' + names);
+  }
   await click(page, `.card[data-f="${joris}"]`); await sleep(400); // admin: opens the dose sheet
   await click(page, '[data-a=detail]'); await sleep(600);
   await click(page, '.hist li[data-did]'); await sleep(400);

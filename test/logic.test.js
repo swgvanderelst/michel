@@ -358,3 +358,87 @@ test('shareText: the link with ?p=<token> is INSIDE the text', () => {
   assert.ok(text.includes('AWAKENINGS ADE 2026'));
   assert.equal(L.tokenFromLink(text.slice(text.indexOf('http'))), 'AbCdEf123456'); // a recipient can pull the link back out of the text
 });
+
+test('planSchedule: no doses starts at the entry time and respects the waits', () => {
+  const t0 = 1_800_000_000_000, H = 3600000;
+  const r = L.planSchedule({ doses: [], max: 1.5, size: 0.5, start: t0, cutoff: t0 + 20 * H, now: t0 - H });
+  assert.deepEqual(r.map(x => [x.t, x.size]), [[t0, 0.5], [t0 + 90 * M, 0.5], [t0 + 180 * M, 0.5]]); // stops at max, waits 90 min after each half
+});
+
+test('planSchedule: starts from the own real doses (latest t, that dose wait), never before now', () => {
+  const t0 = 1_800_000_000_000;
+  const doses = [{ id: 'a', t: t0 - 300 * M, size: 1 }, { id: 'b', t: t0, size: 0.25 }]; // latest by t is the 1/4: wait 60
+  const r = L.planSchedule({ doses, max: 2, size: 0.5, start: t0 - 999 * M, cutoff: t0 + 600 * M, now: t0 });
+  assert.equal(r[0].t, t0 + 60 * M);
+  assert.equal(r[0].size, 0.5);
+  assert.equal(r[1].t, t0 + 60 * M + 90 * M);
+  assert.equal(L.total(doses) + L.total(r), 2); // exactly max, never above
+  // late: the plan shifts, nothing lies before now
+  const late = L.planSchedule({ doses, max: 2, size: 0.5, start: 0, cutoff: t0 + 600 * M, now: t0 + 200 * M });
+  assert.equal(late[0].t, t0 + 200 * M);
+  // a whole dose waits 120
+  const whole = L.planSchedule({ doses: [{ id: 'w', t: t0, size: 1 }], max: 3, size: 1, start: 0, cutoff: t0 + 900 * M, now: t0 });
+  assert.deepEqual(whole.map(x => x.t), [t0 + 120 * M, t0 + 240 * M]);
+});
+
+test('planSchedule: rounding at max uses the room only when it is a valid size', () => {
+  const t0 = 1_800_000_000_000, o = { start: t0, cutoff: t0 + 99999 * M, now: t0 };
+  const a = L.planSchedule({ ...o, doses: [], max: 1.25, size: 0.5 });
+  assert.deepEqual(a.map(x => x.size), [0.5, 0.5, 0.25]); // the last bit is a 1/4
+  const b = L.planSchedule({ ...o, doses: [], max: 1.75, size: 1 });
+  assert.deepEqual(b.map(x => x.size), [1]); // 3/4 left is not a valid size: stop
+  const c = L.planSchedule({ ...o, doses: [], max: 1.5, size: 1 });
+  assert.deepEqual(c.map(x => x.size), [1, 0.5]); // room 1/2 is valid
+  const d = L.planSchedule({ ...o, doses: [], max: 0.25, size: 1 });
+  assert.deepEqual(d.map(x => x.size), [0.25]);
+  const e = L.planSchedule({ ...o, doses: [], max: 0.1, size: 0.5 });
+  assert.deepEqual(e, []); // less than a quarter of room
+});
+
+test('planSchedule: max reached, no max, bad size, cutoff', () => {
+  const t0 = 1_800_000_000_000;
+  assert.deepEqual(L.planSchedule({ doses: [{ id: 'a', t: t0, size: 1 }, { id: 'b', t: t0, size: 0.5 }], max: 1.5, size: 0.5, start: t0, cutoff: t0 + 9e9, now: t0 }), []); // already at max
+  assert.deepEqual(L.planSchedule({ doses: [{ id: 'a', t: t0, size: 2 }], max: 1.5, size: 0.5, start: t0, cutoff: t0 + 9e9, now: t0 }), []); // above max
+  assert.deepEqual(L.planSchedule({ doses: [], max: null, size: 0.5, start: t0, cutoff: t0 + 9e9, now: t0 }), []); // no max, no plan
+  assert.deepEqual(L.planSchedule({ doses: [], max: undefined, size: 0.5, start: t0, cutoff: t0 + 9e9, now: t0 }), []);
+  assert.deepEqual(L.planSchedule({ doses: [], max: 2, size: 0.3, start: t0, cutoff: t0 + 9e9, now: t0 }), []); // invalid size
+  const cut = L.planSchedule({ doses: [], max: 5, size: 0.5, start: t0, cutoff: t0 + 100 * M, now: t0 }); // 0 and 90 fit, 180 does not
+  assert.deepEqual(cut.map(x => x.t), [t0, t0 + 90 * M]);
+  assert.deepEqual(L.planSchedule({ doses: [], max: 2, size: 0.5, start: t0, cutoff: t0 - 1, now: t0 }), []); // cutoff already passed
+});
+
+test('planWindow: entry/end across midnight, a past entry time, cutoff before the end, invalid input', () => {
+  const now = new Date(2026, 8, 10, 23, 0).getTime(); // 23:00
+  const w = L.planWindow({ entry: '22:00', end: '03:00', beforeH: 2, now });
+  assert.equal(w.start, new Date(2026, 8, 10, 22, 0).getTime()); // a past entry time (an hour ago)
+  assert.equal(w.end, new Date(2026, 8, 11, 3, 0).getTime()); // across midnight
+  assert.equal(w.cutoff, new Date(2026, 8, 11, 1, 0).getTime()); // 2 h before the end
+  // the plan stops after the cutoff across midnight
+  const r = L.planSchedule({ doses: [], max: 9, size: 0.5, start: w.start, cutoff: w.cutoff, now });
+  assert.ok(r.length > 0 && r.every(x => x.t >= now && x.t <= w.cutoff));
+  assert.ok(r.at(-1).t > new Date(2026, 8, 11, 0, 0).getTime()); // reaches past midnight
+  // an entry far in the future means last evening; far in the past means tonight
+  const morning = new Date(2026, 8, 11, 3, 0).getTime();
+  assert.equal(L.planWindow({ entry: '20:00', end: '05:00', now: morning }).start, new Date(2026, 8, 10, 20, 0).getTime());
+  const noon = new Date(2026, 8, 10, 12, 0).getTime();
+  assert.equal(L.planWindow({ entry: '23:30', end: '06:00', now: noon }).start, new Date(2026, 8, 10, 23, 30).getTime()); // 11.5 h ahead: today
+  assert.equal(L.planWindow({ entry: '00:10', end: '04:00', now: new Date(2026, 8, 10, 19, 0).getTime() }).start, new Date(2026, 8, 11, 0, 10).getTime()); // a long time ago: tonight after midnight
+  assert.equal(L.planWindow({ entry: '10:00', end: '10:00', now: noon }).end, new Date(2026, 8, 11, 10, 0).getTime()); // equal times: next day
+  assert.equal(L.planWindow({ entry: 'x', end: '03:00', now }), null);
+  assert.equal(L.planWindow({ entry: '22:00', end: '25:00', now }), null);
+  assert.equal(L.planWindow({ entry: null, end: '03:00', now }), null);
+  assert.equal(L.planWindow({ entry: '22:00', end: '03:00', now }).cutoff, w.cutoff); // default beforeH is 2
+});
+
+test('compareCrew: due (longest overdue first), wait (least left first), none A-Z, max A-Z', () => {
+  const mk = (name, st) => ({ name, st });
+  const list = [
+    mk('Max2', { kind: 'max' }), mk('Zoe', { kind: 'none' }), mk('W-long', { kind: 'wait', rem: 50 * M }), mk('Due-short', { kind: 'due', over: 1 * M }),
+    mk('Anna', { kind: 'none' }), mk('W-short', { kind: 'wait', rem: 5 * M }), mk('Due-long', { kind: 'due', over: 30 * M }), mk('Max1', { kind: 'max' }),
+  ];
+  assert.deepEqual(list.slice().sort(L.compareCrew).map(x => x.name), ['Due-long', 'Due-short', 'W-short', 'W-long', 'Anna', 'Zoe', 'Max1', 'Max2']);
+  // ties fall back to the name
+  assert.deepEqual([mk('B', { kind: 'due', over: 5 }), mk('A', { kind: 'due', over: 5 })].sort(L.compareCrew).map(x => x.name), ['A', 'B']);
+  assert.deepEqual([mk('B', { kind: 'wait', rem: 5 }), mk('A', { kind: 'wait', rem: 5 })].sort(L.compareCrew).map(x => x.name), ['A', 'B']);
+  assert.equal(L.compareCrew(mk('A', { kind: 'none' }), mk('A', { kind: 'none' })), 0);
+});

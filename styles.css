@@ -399,3 +399,13 @@ ol.steps svg{display:inline-block;width:20px;height:20px;vertical-align:-4px;col
 .stepcard .sc-note{font-size:14px;font-weight:700;margin-top:10px}
 @keyframes bob{50%{transform:translateY(5px)}}
 @media (prefers-reduced-motion:reduce){.stepcard .sc-arrow{animation:none}}
+
+/* personal plan */
+.plan-list{margin-top:6px}
+.plan-row{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-radius:16px;background:#121212;margin-top:8px;font-family:var(--disp);font-size:34px}
+.plan-row .s{color:var(--fg)}
+.plan-row.next{background:var(--fg);color:#000}
+.plan-row.next .s{color:#000}
+.plan-chips .chip{font-size:24px}
+.planline b{color:var(--fg)}
+.card.due .planline b{color:#000}

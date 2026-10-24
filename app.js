@@ -319,16 +319,71 @@ function cardHtml(f, p, now) {
   else if (st.kind === 'due') body = `<div class="alarmtxt">Inkakken is bijpakken!</div><div class="over">+<span data-r="cd">${dur(st.over)}</span></div>${last}`;
   else body = `<div class="maxlbl">${ICON.check}Max bereikt</div>${last}`;
   const tag = mine ? `<span class="you">${isAdmin(p) ? 'DE MICHEL' : 'JIJ'}</span>` : '';
-  return `<div class="card ${st.kind}" data-f="${esc(f.id)}" data-k="${st.kind}"><div class="row"><div class="name">${esc(f.name)}${tag}</div>${tot}</div>${body}</div>`;
+  return `<div class="card ${st.kind}" data-f="${esc(f.id)}" data-k="${st.kind}"><div class="row"><div class="name">${esc(f.name)}${tag}</div>${tot}</div>${body}${mine ? planLine(p, f) : ''}</div>`;
 }
 
+// ---------- personal plan: stored on this phone only (michel_plan_<pid>), recomputed from the real doses ----------
+const planKey = pid => 'michel_plan_' + pid;
+const planDefaults = (p, f) => { const mine = L.sortDosesDesc(dosesOf(p, f.id)); const first = mine.length ? mine[mine.length - 1].t : nowMs(); return { entry: hhmm(first), end: '', before: 2, size: 0.5, max: null }; };
+const getPlan = (p, f) => ({ ...planDefaults(p, f), ...ls.get(planKey(p.id), {}) });
+function planFor(p, f) { // {plan, max, rows, win} or a reason it cannot be computed
+  const plan = getPlan(p, f), max = f.max != null ? f.max : plan.max;
+  if (max == null) return { plan, max, reason: 'max' };
+  const win = L.planWindow({ entry: plan.entry, end: plan.end, beforeH: plan.before, now: nowMs() });
+  if (!win) return { plan, max, reason: 'end' };
+  const rows = L.planSchedule({ doses: dosesOf(p, f.id), max, size: plan.size, start: win.start, cutoff: win.cutoff, now: nowMs() });
+  return { plan, max, win, rows };
+}
+function planLine(p, f) {
+  const r = planFor(p, f);
+  return r.rows && r.rows.length ? `<div class="meta planline">Volgens plan: <b>± ${hhmm(r.rows[0].t)}</b></div>` : '';
+}
+function planBuild(fid) {
+  return () => {
+    const p = P(), f = p && friendOf(p, fid); if (!p || !f || meOf(p) !== fid) return null;
+    const r = planFor(p, f), pl = r.plan, adminMax = f.max != null;
+    const chips = (name, vals, cur, fmt) => `<div class="chips plan-chips">${vals.map(v => `<button class="chip ${v === cur ? 'on' : ''}" data-a="plan-${name}" data-v="${v}">${fmt(v)}</button>`).join('')}</div>`;
+    const maxBlock = adminMax
+      ? `<div class="pill"><span>${frac(f.max)}</span><small>${mb()} Max van De Michel</small></div>`
+      : `<div class="stepper"><button data-a="plan-maxdown" aria-label="Minder">${ICON.minus}</button><div class="v ${pl.max == null ? 'nomax' : ''}">${pl.max == null ? 'GEEN MAX' : frac(pl.max)}</div><button data-a="plan-maxup" aria-label="Meer">${ICON.add}</button></div>`;
+    let result;
+    if (r.reason === 'max') result = '<p class="lead">Stel eerst je max in.</p>';
+    else if (r.reason === 'end') result = '<p class="lead">Vul het einde van het feestje in.</p>';
+    else if (!r.rows.length) result = `<p class="lead">Geen momenten gepland: je max is bereikt of het laatste moment (${hhmm(r.win.cutoff)}) is voorbij.</p>`;
+    else result = `<ul class="plan-list">${r.rows.map((x, i) => `<li class="plan-row ${i === 0 ? 'next' : ''}"><span class="t">± ${hhmm(x.t)}</span><span class="s">${frac(x.size)}</span></li>`).join('')}</ul><p class="note">Plan stopt om ${hhmm(r.win.cutoff)} (laatste moment).</p>`;
+    return `<h1 style="font-size:84px;margin-top:0">Mijn<br>plan</h1>
+      <p class="note" style="margin-top:0">Alleen op deze telefoon. Het plan rekent met je echte snoepjes en de wachttijden.</p>
+      <div class="h3">Binnenkomst</div><input class="field" type="time" id="pl-entry" value="${esc(pl.entry)}" style="font-size:40px;text-align:center">
+      <div class="h3">Einde feestje</div><input class="field" type="time" id="pl-end" value="${esc(pl.end)}" style="font-size:40px;text-align:center">
+      <div class="h3">Laatste moment: uur voor het einde</div>${chips('before', [1, 1.5, 2, 3], pl.before, v => String(v).replace('.', ',') + ' u')}
+      <div class="h3">Grootte per keer</div>${chips('size', [1, 0.5, 0.25], pl.size, v => frac(v))}
+      <div class="h3">Max ${adminMax ? mb() : ''}</div>${maxBlock}
+      <div class="h3">Volgens plan</div>${result}`;
+  };
+}
+function openPlan() {
+  const p = P(), me = p && meOf(p); if (!me) return toast('Kies eerst je naam');
+  pushScreen('plan:' + me, 'Terug', planBuild(me), { live: true });
+}
+function savePlan(patch) {
+  const p = P(), me = p && meOf(p), f = me && friendOf(p, me); if (!f) return;
+  ls.set(planKey(p.id), { ...getPlan(p, f), ...patch });
+  const s = screens.find(x => x.key === 'plan:' + me); if (s) renderScreen(s);
+  render();
+}
+
+// shortest time until bijpakken first (see L.compareCrew)
+const orderedFriends = (p, now) => p.friends.map(f => ({ f, name: f.name, st: L.status(dosesOf(p, f.id), f.max, now) })).sort(L.compareCrew).map(x => x.f);
+let touching = false, pendingRender = false; // never move a card under the user's finger
+const reducedMotionNow = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+function cardTops() { const m = new Map(); for (const el of document.querySelectorAll('#view .card[data-f]')) m.set(el.dataset.f, el.getBoundingClientRect().top); return m; }
 function crewView(p) {
   if (!p.friends.length) {
     const msg = isAdmin(p) ? 'Tik op de grote plus om je eerste vriend toe te voegen.' : 'Vraag De Michel om vrienden toe te voegen.';
     return `<div class="empty"><h2>Nog geen crew</h2><p>${msg}</p></div>`;
   }
-  const me = meOf(p), now = nowMs();
-  const order = p.friends.slice().sort((a, b) => (b.id === me) - (a.id === me));
+  const now = nowMs();
+  const order = orderedFriends(p, now); // sorted by time until bijpakken; the own card is no longer pinned
   return `<div class="pad">${iosStepCard()}${installBanner()}${lostBanner(p)}${order.map(f => cardHtml(f, p, now)).join('')}</div>`;
 }
 // iOS Safari tab: the party is visible read-only, names are only picked in the installed app (separate storage on iOS)
@@ -387,6 +442,7 @@ function settingsView(p) {
     <div class="h3">Feestje ${mb(admin)}</div>
     <div class="lrow" style="margin-top:6px">${mb(admin)}<button class="big danger ${admin && open ? '' : 'off'}" style="margin-top:0" data-a="closeparty">Feestje afsluiten</button></div>
     <p class="note" style="margin-top:8px">Een afgesloten feestje is alleen-lezen: geen alarm en geen nieuwe snoepjes.</p>
+    ${meF ? '<button class="big outline" data-a="plan" style="height:66px;font-size:24px;margin-top:18px">Mijn plan</button>' : ''}
     <button class="big" data-a="rules" style="height:66px;font-size:24px;margin-top:18px">Spelregels</button>
     <button class="big ghost" data-a="leave" style="margin-top:20px;height:66px;font-size:24px">Feestje verlaten</button>
     <div class="h3">Jouw telefoon-ID</div>
@@ -400,8 +456,16 @@ function renderView() {
   const p = P();
   const v = $('#view');
   if (!p) { v.innerHTML = ''; return; }
+  if (touching && tab === 'crew' && v.querySelector('.card[data-f]')) { pendingRender = true; return; } // re-render when the finger is lifted
+  const flip = tab === 'crew' && !reducedMotionNow() ? cardTops() : null; // FLIP: remember where the cards were
   const body = { crew: crewView, top: topView, log: logView, settings: settingsView }[tab](p);
   v.innerHTML = titleBlock(p) + body;
+  if (flip && flip.size) {
+    for (const el of document.querySelectorAll('#view .card[data-f]')) {
+      const before = flip.get(el.dataset.f), dy = before == null ? 0 : before - el.getBoundingClientRect().top;
+      if (Math.abs(dy) > 1 && el.animate) el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 200, easing: 'ease-out' });
+    }
+  }
 }
 
 function render() {
@@ -648,6 +712,7 @@ function detailBuild(fid) {
       <div class="h3" style="margin-top:14px">Max per avond ${mb(admin)}</div>${stepper}
       <p class="note">Stappen van ¼. Standaard staat het op <b>GEEN MAX</b>: tik op − onder ¼ om de max weer uit te zetten.</p>
       ${can ? '<button class="big" data-a="adddose" style="margin-top:18px">Snoepje toevoegen</button>' : ''}
+      ${meOf(p) === fid ? '<button class="big outline" data-a="plan" style="margin-top:12px">Mijn plan</button>' : ''}
       <div class="h3">Vanavond · totaal ${frac(tot)}</div><ul class="hist">${hist}</ul>
       ${can ? '<p class="note">Tik op een regel om de tijd aan te passen of te verwijderen.</p>' : '<p class="note">Alleen jijzelf en De Michel kunnen snoepjes van deze vriend aanpassen.</p>'}
       <div class="lrow" style="margin-top:22px">${mb(admin)}<button class="big danger ${admin && open ? '' : 'off'}" style="margin-top:0" data-a="delfriend" data-fid="${esc(fid)}">${esc(f.name)} verwijderen</button></div>`;
@@ -762,6 +827,7 @@ function rulesBuild() {
       <li>Iedereen kiest zijn eigen naam. Tik op de grote <b>+</b> om bij te pakken: kies <b>1</b>, <b>½</b> of <b>¼</b>, en de tijd (nu of eerder).</li>
       <li>Na een hele gaat na <b>2 uur</b> het alarm af, na een halve na <b>1,5 uur</b>, na een kwart na <b>1 uur</b>: <b>INKAKKEN IS BIJPAKKEN!</b></li>
       <li>Alarm werkt alleen met De Michel open.</li>
+      <li>Je plan blijft binnen je max en stopt op je laatste moment.</li>
       <li>De Michel krijgt ieders alarm, de rest alleen hun eigen.</li>
       <li>Max bereikt? Dan geen alarm meer.</li>
       <li><b>TOP</b> = wie heeft het meest, <b>LOG</b> = wie nam wat wanneer.</li>
@@ -809,6 +875,8 @@ document.addEventListener('submit', async e => {
 });
 
 document.addEventListener('change', e => {
+  if (e.target.id === 'pl-entry') return savePlan({ entry: e.target.value });
+  if (e.target.id === 'pl-end') return savePlan({ end: e.target.value });
   if (e.target.id === 't-custom') {
     doseState.custom = e.target.value;
     document.querySelectorAll('#sheet .chip').forEach(c => c.classList.remove('on'));
@@ -901,6 +969,11 @@ document.addEventListener('click', async e => {
     case 'doinstall': { const ev = installEvent; installEvent = null; ls.set('michel_install_hidden', true); render(); if (ev) { try { await ev.prompt(); } catch { /* dismissed */ } } return; }
     case 'hideinstall': installEvent = null; ls.set('michel_install_hidden', true); render(); return;
     case 'rules': return openRules();
+    case 'plan': return openPlan();
+    case 'plan-before': return savePlan({ before: +d.v });
+    case 'plan-size': return savePlan({ size: +d.v });
+    case 'plan-maxup': { const f = friendOf(p, meOf(p)); return savePlan({ max: Math.min(20, ((getPlan(p, f).max ?? 0) + 0.25)) }); }
+    case 'plan-maxdown': { const f = friendOf(p, meOf(p)); const m = getPlan(p, f).max; return savePlan({ max: m == null || m <= 0.25 ? null : m - 0.25 }); }
     case 'rulesok': { ls.set('michel_rules_seen', true); const r = screens.find(x => x.key === 'rules'); if (r) popScreen(r); return; }
     case 'claim': {
       try { await store.claim(current, d.fid); tab = 'crew'; toast('Welkom!'); if (!ls.get('michel_rules_seen', false)) setTimeout(openRules, 350); } catch (err) { toast(err && err.code === 'denied' ? 'Die naam is al bezet' : failMsg(err)); }
@@ -1177,6 +1250,7 @@ function tick() {
       const f = friendOf(p, el.dataset.f); if (!f) continue;
       const st = L.status(dosesOf(p, f.id), f.max, now);
       if (el.dataset.k !== st.kind) { renderView(); break; }
+      if (orderedFriends(p, now).map(x => x.id).join() !== [...document.querySelectorAll('#view .card[data-f]')].map(c => c.dataset.f).join()) { renderView(); break; } // only when the order would change
       const cd = $('[data-r=cd]', el), bar = $('[data-r=bar]', el);
       if (cd) cd.textContent = dur(st.kind === 'wait' ? st.rem : st.over);
       if (bar) bar.style.width = (st.p * 100).toFixed(1) + '%';
@@ -1192,6 +1266,7 @@ function tick() {
 }
 
 // ---------- scroll: collapsing large title ----------
+{ const sc = $('#scroll'); const up = () => { touching = false; if (pendingRender) { pendingRender = false; renderView(); } }; sc.addEventListener('touchstart', () => { touching = true; }, { passive: true }); sc.addEventListener('touchend', up); sc.addEventListener('touchcancel', up); }
 $('#scroll').addEventListener('scroll', e => $('#bar').classList.toggle('small', e.target.scrollTop > 60), { passive: true });
 
 // ---------- init ----------

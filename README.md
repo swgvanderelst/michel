@@ -49,6 +49,7 @@ Staat je naam als **Bezet** (nieuw toestel), vraag De Michel om hem vrij te geve
 - Iedereen kiest zijn eigen naam. Tik op de grote + om bij te pakken: kies 1, ½ of ¼, en de tijd (nu of eerder).
 - Na een hele gaat na 2 uur het alarm af, na een halve na 1,5 uur, na een kwart na 1 uur: INKAKKEN IS BIJPAKKEN!
 - Alarm werkt alleen met De Michel open.
+- Je plan blijft binnen je max en stopt op je laatste moment. (Mijn plan: alleen op je eigen telefoon, nooit gesynct; het rekent met je echte snoepjes en de wachttijden en geeft geen extra alarm.)
 - De Michel krijgt ieders alarm, de rest alleen hun eigen.
 - Max bereikt? Dan geen alarm meer.
 - TOP = wie heeft het meest, LOG = wie nam wat wanneer.

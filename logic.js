@@ -192,3 +192,54 @@ export const bpmAt = step => Math.min(BPM_MAX, BPM0 + BPM_STEP_PER_BAR * step / 
 // may a party raise alarms? live snapshot, or the cache when offline / when no snapshot arrived after 5 s
 // (a stale cache can at worst cause a false alarm, which drops itself without writing 'seen')
 export const alarmGate = ({ live, hasCache, online, uptimeMs }) => !!live || (!!hasCache && (!online || uptimeMs > 5000));
+
+// ---- personal plan (lives on the own phone only, never synced) ----
+const PLAN_EPS = 1e-9;
+/**
+ * Planned moments [{t, size}] from the user's own real doses.
+ * Next moment = latest dose + the existing wait for THAT dose's size (or the entry time with no doses), never before now.
+ * Each step adds size; when the room under max is smaller than size, the room is used only if it is a valid size, else the plan stops.
+ * Stops at max (no room left) or when the next moment lies after the cutoff. No max, no plan.
+ */
+export function planSchedule({ doses = [], max, size, start, cutoff, now }) {
+  if (max == null || !WAIT_MIN[size]) return [];
+  let total = total_(doses);
+  const last = latestDose(doses);
+  let t = Math.max(last ? last.t + WAIT_MIN[last.size] * 60000 : start, now);
+  const out = [];
+  for (let i = 0; i < 40; i++) {
+    const room = max - total;
+    if (room < 0.25 - PLAN_EPS) break; // max reached
+    const s = room >= size - PLAN_EPS ? size : SIZES.find(v => Math.abs(room - v) < PLAN_EPS);
+    if (!s || t > cutoff) break; // no valid size for the rest, or after the last moment
+    out.push({ t, size: s });
+    total += s;
+    t += WAIT_MIN[s] * 60000;
+  }
+  return out;
+}
+const total_ = ds => ds.reduce((a, d) => a + d.size, 0);
+
+/** "HH:MM" entry/end + hours before the end -> {start, end, cutoff} as timestamps (end may lie after midnight); null when invalid. */
+export function planWindow({ entry, end, beforeH = 2, now }) {
+  const parse = s => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s ?? '').trim()); return m && +m[1] < 24 && +m[2] < 60 ? [+m[1], +m[2]] : null; };
+  const e = parse(entry), n = parse(end);
+  if (!e || !n) return null;
+  const at = (hm, ref, plusDays = 0) => { const d = new Date(ref); d.setDate(d.getDate() + plusDays); d.setHours(hm[0], hm[1], 0, 0); return d.getTime(); };
+  let start = at(e, now);
+  if (start > now + 12 * 3600000) start = at(e, now, -1); // an entry far ahead means last evening
+  else if (start < now - 12 * 3600000) start = at(e, now, 1);
+  let endT = at(n, start);
+  if (endT <= start) endT = at(n, start, 1); // across midnight
+  return { start, end: endT, cutoff: endT - beforeH * 3600000 };
+}
+
+// Crew order: due (longest overdue first), then wait (least time left first), then none (A-Z), then max (A-Z). a/b = {name, st} with st = status().
+const CREW_RANK = { due: 0, wait: 1, none: 2, max: 3 };
+export function compareCrew(a, b) {
+  const ra = CREW_RANK[a.st.kind], rb = CREW_RANK[b.st.kind];
+  if (ra !== rb) return ra - rb;
+  if (a.st.kind === 'due' && a.st.over !== b.st.over) return b.st.over - a.st.over;
+  if (a.st.kind === 'wait' && a.st.rem !== b.st.rem) return a.st.rem - b.st.rem;
+  return a.name.localeCompare(b.name);
+}
