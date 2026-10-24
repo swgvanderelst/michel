@@ -10,7 +10,7 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const FUTURE_MS = 5 * 60 * 1000;
 const SIZES = [1, 0.5, 0.25];
 const KEY_RE = /^[-_A-Za-z0-9]{1,32}$/; // party/friend/dose ids and uids: safe to put in HTML attributes
-const CODE_RE = /^[0-9]{4}$/;
+const CODE_RE = /^[A-Za-z0-9]{10,32}$/; // long random join tokens (nobody types them)
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
@@ -43,7 +43,7 @@ const sameSecret = (a, b) => {
  * creators: array of uids allowed to create parties (mirrors the `creators` list in the rules),
  * or null = anybody (local convenience only, not what production does).
  */
-export function startServer({ port = 8787, persistFile = null, seed = false, creators = null, now = () => Date.now() } = {}) {
+export function startServer({ port = 8787, host = '127.0.0.1', persistFile = null, seed = false, creators = null, now = () => Date.now() } = {}) {
   let db = { parties: {}, codes: {}, sessions: {} };
   if (persistFile && fs.existsSync(persistFile)) {
     try { db = { sessions: {}, ...JSON.parse(fs.readFileSync(persistFile, 'utf8')) }; } catch { /* start empty */ }
@@ -71,8 +71,9 @@ export function startServer({ port = 8787, persistFile = null, seed = false, cre
       const t = now(), id = 'p' + crypto.randomBytes(8).toString('hex');
       const friends = {};
       ['Sanne', 'Joris', 'Fem', 'Daan', 'Bart'].forEach((name, i) => { friends['seed-' + name.toLowerCase()] = { name, createdAt: t + i }; });
-      db.parties[id] = { seedParty: true, name: 'AWAKENINGS ADE 2026', admin: 'dev-admin', createdAt: t, codes: { 8209: t, 7815: t + 1 }, friends };
-      db.codes['8209'] = db.codes['7815'] = id;
+      const token = crypto.randomBytes(9).toString('base64url').replace(/[-_]/g, 'x').slice(0, 12);
+      db.parties[id] = { seedParty: true, name: 'AWAKENINGS ADE 2026', admin: 'dev-admin', createdAt: t, codes: { [token]: 0 }, friends };
+      db.codes[token] = id;
     }
   }
 
@@ -109,7 +110,7 @@ const checkStamp = body => { if ('createdAt' in body && !okTime(body.createdAt, 
       db.parties[body.id] = { name: body.name, admin: uid, createdAt: t };
       if (codes.length) {
         db.parties[body.id].codes = {};
-        codes.forEach((c, i) => { db.parties[body.id].codes[c] = t + i; db.codes[c] = body.id; });
+        codes.forEach((c, i) => { db.parties[body.id].codes[c] = i; db.codes[c] = body.id; }); // value = order, 0 = main code
       }
       push(body.id);
       return [201, { id: body.id }];
@@ -141,8 +142,8 @@ const checkStamp = body => { if ('createdAt' in body && !okTime(body.createdAt, 
         return [201, { code: body.code }];
       }
       if (rest.length === 2 && method === 'DELETE') {
-        needAdmin(p, uid); needOpen(p);
-        if (!p.codes?.[rest[1]] || db.codes[rest[1]] !== id) throw new HttpError(404, 'no such code');
+        needAdmin(p, uid); // also allowed after closing
+        if (p.codes?.[rest[1]] === undefined || db.codes[rest[1]] !== id) throw new HttpError(404, 'no such code');
         delete p.codes[rest[1]];
         delete db.codes[rest[1]];
         push(id);
@@ -176,7 +177,8 @@ const checkStamp = body => { if ('createdAt' in body && !okTime(body.createdAt, 
     if (rest[0] === 'friends') {
       if (rest.length === 1 && method === 'POST') {
         needAdmin(p, uid); needOpen(p);
-        onlyKeys(body, ['name', 'createdAt', 'max']);
+        onlyKeys(body, ['name', 'createdAt', 'max', 'claim']);
+        if (body.claim === true && p.members?.[uid]) throw deny('already claimed'); // admin adds their own name AND claims it, atomically
         if (!isStr(body.name, 1, 14)) throw bad('name');
         if (nameTaken(p, body.name)) throw new HttpError(409, 'name taken');
         checkStamp(body);
@@ -185,6 +187,7 @@ const checkStamp = body => { if ('createdAt' in body && !okTime(body.createdAt, 
         const f = { name: body.name, createdAt: now() };
         if (body.max != null) f.max = body.max;
         (p.friends ||= {})[fid] = f;
+        if (body.claim === true) { (p.claims ||= {})[fid] = uid; (p.members ||= {})[uid] = fid; }
         push(id);
         return [201, { id: fid }];
       }
@@ -215,8 +218,8 @@ const checkStamp = body => { if ('createdAt' in body && !okTime(body.createdAt, 
       if (rest.length === 1 && method === 'POST') {
         needOpen(p);
         onlyKeys(body, ['id', 'friendId', 'size', 't', 'addedAt']);
+        if (typeof body.friendId !== 'string' || !p.friends?.[body.friendId]) throw bad('friendId'); // validation before permission
         if (p.admin !== uid && !isMine(p, uid, body.friendId)) throw deny('not your friend');
-        if (typeof body.friendId !== 'string' || !p.friends?.[body.friendId]) throw bad('friendId');
         if (!SIZES.includes(body.size)) throw bad('size');
         if (!okTime(body.t, now())) throw bad('t');
         if ('addedAt' in body && !okTime(body.addedAt, now())) throw bad('addedAt');
@@ -319,11 +322,12 @@ const checkStamp = body => { if ('createdAt' in body && !okTime(body.createdAt, 
   ping.unref();
 
   return new Promise(resolve => {
-    server.listen(port, () => {
+    server.listen(port, host, () => {
       resolve({
         server,
         port: server.address().port,
         db: () => db,
+        seed: (() => { const [id, p] = Object.entries(db.parties).find(([, x]) => x.seedParty) || []; return id ? { partyId: id, code: Object.keys(p.codes || {})[0] } : null; })(),
         close() {
           clearInterval(ping);
           flush();
@@ -340,6 +344,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const seed = process.env.MICHEL_SEED === '1';
   // MICHEL_CREATORS=uid1,uid2 enforces the creator allow-list (dev-admin is added by the seed); unset = anybody
   const list = process.env.MICHEL_CREATORS;
-  const s = await startServer({ port: Number(process.env.PORT) || 8787, persistFile: persist, seed, creators: list ? list.split(',').map(x => x.trim()).filter(Boolean) : null });
-  console.log(`De Michel dev server: http://localhost:${s.port}/${seed ? '  (seed: AWAKENINGS ADE 2026, codes 8209 + 7815, admin uid dev-admin, secret dev-admin-secret)' : ''}`);
+  const s = await startServer({ port: Number(process.env.PORT) || 8787, host: process.env.HOST || '127.0.0.1', persistFile: persist, seed, creators: list ? list.split(',').map(x => x.trim()).filter(Boolean) : null });
+  console.log(`De Michel dev server: http://localhost:${s.port}/${seed ? '  (seed: AWAKENINGS ADE 2026, admin uid dev-admin, secret dev-admin-secret)\n  join link: http://localhost:${s.port}/?p=${s.seed && s.seed.code}' : ''}`);
 }

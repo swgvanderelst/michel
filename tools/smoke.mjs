@@ -9,7 +9,7 @@ const { browser, close } = await launchEdge();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const admin = { 'x-uid': 'dev-admin', 'x-secret': 'dev-admin-secret', 'content-type': 'application/json' };
 const get = u => fetch(base + '/api' + u, { headers: admin }).then(r => r.json());
-const PID = (await get('/codes/8209')).partyId;
+const CODE = srv.seed.code, PID = srv.seed.partyId; // the seed generates a random join token
 const friendId = async name => Object.entries((await get('/parties/' + PID)).friends).find(([, f]) => f.name === name)[0];
 const errors = [];
 async function phone(query, { ua } = {}) {
@@ -22,14 +22,15 @@ async function phone(query, { ua } = {}) {
   await page.goto(base + '/' + query, { waitUntil: 'domcontentloaded' });
   return page;
 }
+const splashGone = async p => { await p.waitForSelector('#splash', { hidden: true, timeout: 9000 }).catch(() => {}); await sleep(1200); }; // splash: min 3 s, max 5 s
 const click = (page, sel) => page.evaluate(s => document.querySelector(s).click(), sel);
 
 try {
   // ---- non-admin: claim, dose through the big + ----
   const sanne = await friendId('Sanne');
   let sanneSecret = null;
-  let page = await phone('?devuid=phone-sanne-01&p=8209');
-  await sleep(2600);
+  let page = await phone(`?devuid=phone-sanne-01&p=${CODE}`);
+  await splashGone(page);
   await page.click(`[data-a=claim][data-fid="${sanne}"]`);
   await sleep(1200);
   assert.equal((await get('/parties/' + PID)).claims[sanne], 'phone-sanne-01');
@@ -55,7 +56,7 @@ try {
 
   // ---- admin: toast must not block the confirm button of a sheet ----
   page = await phone('?devuid=dev-admin');
-  await sleep(2600);
+  await splashGone(page);
   await click(page, '[data-a=claimskip]').catch(() => {});
   await sleep(400);
   const joris = await friendId('Joris');
@@ -81,7 +82,7 @@ try {
   await click(page, '[data-a=back]'); await sleep(400);
   await click(page, '[data-a=share]'); await sleep(700);
   const url = await page.$eval('.qrcard', e => e.dataset.url);
-  assert.equal(url, `${base}/?p=8209`);
+  assert.equal(url, `${base}/?p=${CODE}`);
   assert.equal(await page.$eval('.qrcard svg', e => !!e.querySelector('path')), true);
   const decoded = await page.evaluate(async () => {
     if (!('BarcodeDetector' in window)) return null;
@@ -93,8 +94,9 @@ try {
     return r[0] && r[0].rawValue;
   });
   if (decoded !== null) assert.equal(decoded, url); else console.log('BarcodeDetector unavailable: checked the encoded string only');
-  await click(page, '[data-a=qrpick][data-i="1"]');
-  assert.equal(await page.$eval('.qrcard', e => e.dataset.url), `${base}/?p=7815`);
+  const shown = await page.$eval('.screen .scr', e => e.textContent);
+  assert.ok(!shown.includes(CODE), 'DELEN must not show the join token');
+  assert.equal(await page.$('.screen .code, .qrchips'), null);
   await click(page, '[data-a=qrfull]');
   assert.equal(await page.$('#qrfull svg') !== null, true);
   await click(page, '#qrfull');
@@ -115,7 +117,7 @@ try {
 
   // ---- outbox: a dose added while the server is unreachable is kept and replayed ----
   page = await phone('?devuid=phone-sanne-01&devsecret=' + sanneSecret);
-  await sleep(2600);
+  await splashGone(page);
   await page.setOfflineMode(true);
   await page.click('.plus'); await sleep(400);
   await page.click('[data-a=dose][data-size="0.5"]'); await sleep(2000);
@@ -124,7 +126,7 @@ try {
   assert.match(await page.$eval('#view', e => e.textContent), /wordt verstuurd/i);
   await page.setOfflineMode(false);
   await page.goto(`${base}/?devuid=phone-sanne-01&devsecret=${sanneSecret}`, { waitUntil: 'domcontentloaded' });
-  await sleep(3200);
+  await splashGone(page);
   const after = await get('/parties/' + PID);
   assert.equal(Object.values(after.doses).filter(d => d.size === 0.5 && d.friendId === sanne).length, 1); // replayed exactly once
   assert.equal((await page.evaluate(() => window.__michel.state)).outbox.length, 0);
@@ -132,7 +134,7 @@ try {
 
   // ---- alarm: a changed latest dose is not swallowed; done acknowledges only that dose; an edited time re-arms ----
   page = await phone('?devuid=dev-admin');
-  await sleep(2600);
+  await splashGone(page);
   await click(page, '[data-a=claimskip]').catch(() => {});
   const post = b => fetch(`${base}/api/parties/${PID}/doses`, { method: 'POST', headers: admin, body: JSON.stringify({ friendId: joris, ...b }) }).then(r => r.json());
   const alarmOn = () => page.$eval('#alarm', e => e.classList.contains('on'));
@@ -154,15 +156,114 @@ try {
   assert.equal(await alarmOn(), true, 'editing the time of an acknowledged dose must re-arm the alarm');
   await page.close();
 
+  // ---- N7: reduced motion keeps the calm strobe (no beat flipping) ----
+  page = await browser.newPage();
+  await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+  await page.goto(base + '/?devuid=dev-admin', { waitUntil: 'domcontentloaded' });
+  await splashGone(page);
+  assert.equal(await page.$eval('#alarm', e => e.classList.contains('on')), true);
+  assert.equal(await page.$eval('#alarm', e => e.classList.contains('beat')), false);
+  await page.close();
+
+  // ---- N2: offline cold start still alarms from the cache ----
+  page = await browser.newPage();
+  await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  await page.setRequestInterception(true);
+  page.on('request', r => (r.url().includes('/api/') ? r.abort() : r.continue())); // server unreachable, app shell loads
+  await page.goto(base + '/?devuid=dev-admin', { waitUntil: 'domcontentloaded' });
+  await splashGone(page);
+  assert.equal(await page.$eval('#alarm', e => e.classList.contains('on')), true, 'no alarm from the cache while offline');
+  await page.close();
+
+  // ---- admin: own name + claim in one go, rename, new link; a fresh phone joins by pasted link ----
+  page = await phone('?devuid=dev-admin');
+  await splashGone(page);
+  await click(page, '[data-a=claimskip]').catch(() => {});
+  await click(page, '[data-tab=settings]'); await sleep(300);
+  await click(page, '[data-a=whoami]'); await sleep(500);
+  await click(page, '[data-a=addme]'); await sleep(400);
+  await page.type('#me-nm', 'Michel');
+  await page.keyboard.press('Enter'); await sleep(1000);
+  const mePartyNow = await get('/parties/' + PID);
+  const meId = Object.entries(mePartyNow.friends).find(([, f]) => f.name === 'Michel')[0];
+  assert.equal(mePartyNow.claims[meId], 'dev-admin');
+  assert.equal(mePartyNow.members['dev-admin'], meId);
+  await click(page, '[data-tab=crew]'); await sleep(300);
+  await click(page, '.card[data-f="' + meId + '"]'); await sleep(400); // admin: dose sheet
+  await click(page, '[data-a=detail]'); await sleep(600);
+  await click(page, '.screen [data-a=rename]'); await sleep(400);
+  await page.$eval('#rn-nm', e => { e.value = ''; });
+  await page.type('#rn-nm', 'Michel2');
+  await page.keyboard.press('Enter'); await sleep(800);
+  const renamed = await get('/parties/' + PID);
+  assert.equal(renamed.friends[meId].name, 'Michel2');
+  assert.equal(renamed.claims[meId], 'dev-admin'); // claim and id stay linked
+  await click(page, '[data-a=back]'); await sleep(400);
+  await click(page, '[data-tab=settings]'); await sleep(300);
+  await click(page, '[data-a=newlink]'); await sleep(400);
+  await click(page, '[data-a=confirm-ok]'); await sleep(1000);
+  const afterLink = await get('/parties/' + PID);
+  const newCodes = Object.keys(afterLink.codes || {});
+  assert.equal(newCodes.length, 1);
+  assert.notEqual(newCodes[0], CODE);
+  assert.equal((await fetch(base + '/api/codes/' + CODE, { headers: admin })).status, 404); // the old link is dead
+  assert.equal((await get('/codes/' + newCodes[0])).partyId, PID);
+  await page.close();
+  const fresh = await browser.createBrowserContext(); // clean storage: a phone that never joined anything
+  page = await fresh.newPage();
+  await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  page.on('pageerror', e => errors.push('pageerror: ' + e.message));
+  await page.goto(base + '/?devuid=fresh-phone-01', { waitUntil: 'domcontentloaded' });
+  await splashGone(page);
+  assert.equal(await page.$eval('#start', e => getComputedStyle(e).display), 'flex');
+  assert.match(await page.$eval('#start', e => e.textContent), /Vraag De Michel om de link of QR/);
+  assert.equal(await page.$('[data-a=joinparty]'), null); // no code entry any more
+  await page.evaluate(link => Object.defineProperty(navigator, 'clipboard', { value: { readText: async () => link, writeText: async () => {} }, configurable: true }), `${base}/?p=${newCodes[0]}`);
+  await click(page, '[data-a=pastelink]'); await sleep(1500);
+  assert.equal((await page.evaluate(() => window.__michel.state)).parties.length, 1); // joined from the pasted link
+  await page.close();
+
+  // ---- N3: a start URL with an already handled ?p= opens normally, also after the code was deleted ----
+  page = await phone(`?devuid=dev-admin&p=${CODE}`); // CODE was auto-joined in this browser before and is gone by now (new link)
+  await splashGone(page);
+  const done = await page.evaluate(() => JSON.parse(localStorage.getItem('michel_linkcodes_done') || '[]'));
+  assert.ok(done.includes(CODE));
+  await page.close();
+  page = await phone(`?devuid=dev-admin&p=${CODE}`);
+  await splashGone(page);
+  assert.doesNotMatch(await page.$eval('#toast', e => e.textContent), /werkt niet/);
+  assert.equal(await page.evaluate(() => location.search.includes('p=')), false);
+  await page.close();
+
+  // ---- N4: an outbox entry whose dose the server already has is dropped, never duplicated ----
+  const existing = Object.keys((await get('/parties/' + PID)).doses)[0];
+  const exDose = (await get('/parties/' + PID)).doses[existing];
+  const before = Object.keys((await get('/parties/' + PID)).doses).length;
+  page = await phone('?devuid=dev-admin');
+  await page.evaluate(({ PID, existing, exDose }) => localStorage.setItem('michel_outbox', JSON.stringify([{ pid: PID, id: existing, friendId: exDose.friendId, size: exDose.size, t: exDose.t, addedAt: exDose.addedAt }])), { PID, existing, exDose });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await splashGone(page);
+  assert.equal((await page.evaluate(() => window.__michel.state)).outbox.length, 0);
+  assert.equal(Object.keys((await get('/parties/' + PID)).doses).length, before);
+  await page.close();
+
   // ---- install screen: iPhone Safari tab (not standalone) ----
   const iphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
-  page = await phone('?p=8209', { ua: iphone });
-  await sleep(2500);
+  page = await phone(`?p=${CODE}`, { ua: iphone });
+  await splashGone(page);
   assert.match(await page.$eval('#install', e => e.textContent), /beginscherm/i);
-  assert.match(await page.$eval('#install .code', e => e.textContent), /8209/);
-  assert.equal(await page.evaluate(() => location.search), '?p=8209'); // PIN stays in the URL
+  assert.equal(await page.$('#install .code'), null); // no code on the install screen
+  assert.equal(await page.evaluate(() => location.search), `?p=${CODE}`); // the link token stays in the URL
   assert.equal(await page.$('link[rel=manifest]'), null); // iOS uses the current URL for the home-screen icon
   assert.equal(await page.$eval('[data-a=newparty]', e => getComputedStyle(e.closest('#start')).display), 'none');
+  await page.close();
+
+  // ---- splash: visible for at least 3 s, gone within about 5.5 s ----
+  page = await phone('?devuid=dev-admin');
+  await sleep(2600);
+  assert.equal(await page.evaluate(() => !!document.getElementById('splash')), true, 'splash gone before 3 s');
+  await page.waitForSelector('#splash', { hidden: true, timeout: 4000 });
   await page.close();
 
   const real = errors.filter(e => !/ERR_INTERNET_DISCONNECTED|ERR_FAILED/.test(e) && !e.includes("/api/")); // dev API answers unknown codes with 404 on purpose

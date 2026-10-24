@@ -7,8 +7,8 @@
     "codes": {
       "$code": {
         ".read": "auth != null",
-        ".write": "auth != null && ((!data.exists() && newData.isString() && newData.parent().parent().child('parties').child(newData.val()).child('admin').val() === auth.uid && !newData.parent().parent().child('parties').child(newData.val()).child('closedAt').exists() && newData.parent().parent().child('parties').child(newData.val()).child('codes').child($code).exists()) || (data.exists() && !newData.exists() && root.child('parties').child(data.val()).child('admin').val() === auth.uid && !root.child('parties').child(data.val()).child('closedAt').exists() && !newData.parent().parent().child('parties').child(data.val()).child('codes').child($code).exists()))",
-        ".validate": "$code.matches(/^[0-9]{4}$/) && newData.isString() && newData.val().matches(/^[-_A-Za-z0-9]{1,32}$/)"
+        ".write": "auth != null && ((!data.exists() && newData.isString() && newData.parent().parent().child('parties').child(newData.val()).child('admin').val() === auth.uid && !newData.parent().parent().child('parties').child(newData.val()).child('closedAt').exists() && newData.parent().parent().child('parties').child(newData.val()).child('codes').child($code).exists()) || (data.exists() && !newData.exists() && root.child('parties').child(data.val()).child('admin').val() === auth.uid && !newData.parent().parent().child('parties').child(data.val()).child('codes').child($code).exists()))",
+        ".validate": "$code.matches(/^[A-Za-z0-9]{10,32}$/) && newData.isString() && newData.val().matches(/^[-_A-Za-z0-9]{1,32}$/)"
       }
     },
     "parties": {
@@ -31,8 +31,8 @@
         },
         "codes": {
           "$c": {
-            ".write": "auth != null && auth.uid === root.child('parties').child($pid).child('admin').val() && !root.child('parties').child($pid).child('closedAt').exists()",
-            ".validate": "$c.matches(/^[0-9]{4}$/) && newData.isNumber() && newData.val() > 0 && newData.val() <= now + 300000 && newData.parent().parent().parent().parent().child('codes').child($c).val() === $pid"
+            ".write": "auth != null && auth.uid === root.child('parties').child($pid).child('admin').val() && (!root.child('parties').child($pid).child('closedAt').exists() || !newData.exists()) && (newData.exists() || !newData.parent().parent().parent().parent().child('codes').child($c).exists())",
+            ".validate": "$c.matches(/^[A-Za-z0-9]{10,32}$/) && newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 300000 && newData.parent().parent().parent().parent().child('codes').child($c).val() === $pid"
           }
         },
         "friends": {

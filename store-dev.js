@@ -19,10 +19,11 @@ export async function createStore() {
   };
 
   // dev-only test hook: ?devuid=dev-admin (+ &devsecret=..., dev-admin has a fixed secret in the seed)
-  const forced = q.get('devuid');
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  const forced = local ? q.get('devuid') : null; // test hook: localhost only
   if (forced) {
     uid = forced;
-    secret = q.get('devsecret') || (read('michel_dev_uid') === forced ? read('michel_dev_secret') : null) || (forced === 'dev-admin' ? 'dev-admin-secret' : null);
+    secret = q.get('devsecret') || (read('michel_dev_uid') === forced ? read('michel_dev_secret') : null) || (forced === 'dev-admin' && local ? 'dev-admin-secret' : null);
     if (!secret || !(await valid(uid, secret))) { const s = await register(forced); secret = s ? s.secret : secret; }
   } else {
     uid = read('michel_dev_uid'); secret = read('michel_dev_secret');
@@ -77,6 +78,11 @@ export async function createStore() {
       const r = await api('POST', `/parties/${pid}/friends`, { name, ...(max != null ? { max } : {}) });
       return r.id;
     },
+    async addFriendAndClaim(pid, name) {
+      const r = await api('POST', `/parties/${pid}/friends`, { name, claim: true });
+      return r.id;
+    },
+    renameFriend: (pid, fid, name) => api('PATCH', `/parties/${pid}/friends/${fid}`, { name }),
     setMax: (pid, fid, max) => api('PATCH', `/parties/${pid}/friends/${fid}`, { max }),
     removeFriend: (pid, _party, fid) => api('DELETE', `/parties/${pid}/friends/${fid}`),
     newDoseId: () => newId(Math.random, 16),
@@ -85,6 +91,7 @@ export async function createStore() {
       const r = await api('POST', `/parties/${pid}/doses`, { id, friendId, size, t });
       return r.id;
     },
+    async hasDose(pid, did) { const r = await api('GET', '/parties/' + pid); return !!(r && r.doses && r.doses[did]); },
     setDoseTime: (pid, did, t) => api('PATCH', `/parties/${pid}/doses/${did}`, { t }),
     removeDose: (pid, did) => api('DELETE', `/parties/${pid}/doses/${did}`),
     claim: (pid, fid) => api('POST', `/parties/${pid}/claims`, { friendId: fid }),

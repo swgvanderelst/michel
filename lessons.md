@@ -14,3 +14,7 @@
 - Rules: `update(ref(db), ...)` for multi-path writes; `ref(db, '')` throws in SDK v12.
 - Toasts must never sit over sheet buttons: `pointer-events:none` on the toast, move it to the top while a sheet is open.
 - 'gone' alarms (state changed elsewhere) must never write the seen map; seen is keyed by `doseId:t`.
+- Max per friend is a SOFT rule by product decision: the UI warns ("Toch toevoegen?"), neither rules nor dev server enforce it. Do not flag this as a bug.
+- Rules only allow deleting claims/members that exist: build multi-path deletes from the current snapshot, never blindly (removing an unclaimed friend failed on real Firebase).
+- Falsy trap: code order 0 (main code) is falsy; test `=== undefined`, not `!value`.
+- Windows worktrees check files out with CRLF: patch scripts must normalise line endings.

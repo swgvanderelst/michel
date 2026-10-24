@@ -5,7 +5,7 @@ export const SIZE_NAME = { 1: 'Hele', 0.5: 'Halve', 0.25: 'Kwart' };
 export const WAIT_LABEL = { 1: '2 uur', 0.5: '1,5 uur', 0.25: '1 uur' };
 export const SNOOZE_MS = 10 * 60000;
 export const MAX_FUTURE_MS = 5 * 60000;
-export const CODE_RE = /^[0-9]{4}$/;
+export const CODE_RE = /^[A-Za-z0-9]{10,32}$/; // join token: nobody types it, it travels in the link / QR
 export const ID_RE = /^[-_A-Za-z0-9]{1,32}$/;
 export const isValidId = v => typeof v === 'string' && ID_RE.test(v);
 // key that identifies one alarm-worthy state of a friend: the latest dose and its time
@@ -72,15 +72,30 @@ export function ranking(friends, doses) {
   }).sort((a, b) => b.total - a.total || a.reachedAt - b.reachedAt || a.friend.name.localeCompare(b.friend.name));
 }
 
-// ---- codes: 4-digit PINs ----
-export const normalizeCode = s => String(s ?? '').replace(/\D/g, '').slice(0, 4);
+// ---- join tokens: 12 random [A-Za-z0-9] chars in the link / QR ----
+export const normalizeCode = s => String(s ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 32);
 export const isValidCode = c => typeof c === 'string' && CODE_RE.test(c);
-export function newPartyCode(rand = Math.random, taken = []) {
-  for (let i = 0; i < 1000; i++) {
-    const c = String(Math.floor(rand() * 10000)).padStart(4, '0');
-    if (!taken.includes(c)) return c;
-  }
-  throw new Error('no free code');
+const TOKEN_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+// rand(n) -> n random bytes; rejection sampling keeps the 62 characters unbiased
+export function newToken(len = 12, rand = n => globalThis.crypto.getRandomValues(new Uint8Array(n))) {
+  let out = '';
+  while (out.length < len) for (const b of rand(len * 2)) { if (b < 248 && out.length < len) out += TOKEN_CHARS[b % 62]; }
+  return out;
+}
+// token from a pasted link ("...?p=TOKEN") or a bare token; '' when there is none
+export function tokenFromLink(text) {
+  const t = String(text ?? '').trim();
+  let p = '';
+  try { p = new URL(t).searchParams.get('p') || ''; } catch { /* not a URL */ }
+  if (!p) { const m = /[?&]p=([A-Za-z0-9]+)/.exec(t); p = m ? m[1] : t; }
+  return isValidCode(p) ? p : '';
+}
+// small icon for a friend in 'wait': stable per dose, same on every phone (rocket, disco ball, sunglasses, big eyes)
+export const ICONS = ['rocket', 'disco', 'shades', 'eyes'];
+export function iconFor(doseId) {
+  let h = 5381;
+  for (const ch of String(doseId)) h = ((h << 5) + h + ch.charCodeAt(0)) >>> 0;
+  return ICONS[h % 4];
 }
 const ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 export function newId(rand = Math.random, len = 12) {
@@ -123,10 +138,10 @@ export const myFriendId = (party, uid) => (party && Object.keys(party.claims).fi
 export function retime(str, origT, now = Date.now()) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(str).trim());
   if (!m || +m[1] > 23 || +m[2] > 59) return null;
-  const d = new Date(origT);
-  d.setHours(+m[1], +m[2], 0, 0);
-  if (d.getTime() > now) d.setDate(d.getDate() - 1);
-  return d.getTime();
+  // HH:MM on the day before, of and after the original date; the one that is not in the future and closest to the original wins
+  const cands = [-1, 0, 1].map(k => { const d = new Date(origT); d.setDate(d.getDate() + k); d.setHours(+m[1], +m[2], 0, 0); return d.getTime(); }).filter(t => t <= now);
+  if (!cands.length) return null;
+  return cands.reduce((x, y) => (Math.abs(y - origT) < Math.abs(x - origT) ? y : x));
 }
 
 // show not-yet-acknowledged doses (the outbox) as if they were saved; mark them pending
@@ -165,3 +180,7 @@ export const outboxRemove = (list, pid, id) => list.filter(x => !(x.pid === pid 
 export const BPM0 = 138, BPM_MAX = 200, BPM_STEP_PER_BAR = 6;
 export const CAP_STEP = Math.ceil((BPM_MAX - BPM0) / BPM_STEP_PER_BAR * 16);
 export const bpmAt = step => Math.min(BPM_MAX, BPM0 + BPM_STEP_PER_BAR * step / 16);
+
+// may a party raise alarms? live snapshot, or the cache when offline / when no snapshot arrived after 5 s
+// (a stale cache can at worst cause a false alarm, which drops itself without writing 'seen')
+export const alarmGate = ({ live, hasCache, online, uptimeMs }) => !!live || (!!hasCache && (!online || uptimeMs > 5000));

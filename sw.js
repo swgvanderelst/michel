@@ -1,5 +1,6 @@
-// Offline app shell: cache-first with a versioned cache (bump VERSION on every release).
-const VERSION = 'michel-v1';
+// Offline app shell. Network-first (cache fallback) for navigations, index.html and same-origin js/css so versions never mix;
+// cache-first for everything else (icons, fonts, pinned SDK). Bump VERSION on every release.
+const VERSION = 'michel-v2';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'logic.js', 'store.js', 'store-dev.js', 'store-firebase.js', 'firebase-config.js',
   'vendor/qrcode.js', 'manifest.webmanifest', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'assets/splash.jpg'];
 const SDK = 'https://www.gstatic.com/firebasejs/12.0.0/';
@@ -32,11 +33,20 @@ self.addEventListener('fetch', e => {
   if (same && url.pathname.includes('/api/')) return;
   e.respondWith((async () => {
     const c = await caches.open(VERSION);
-    const hit = await c.match(req, { ignoreSearch: same }); // ?p=PIN must still hit the cached shell
-    if (hit) {
-      if (same) e.waitUntil(fetch(req).then(r => { if (r.ok) c.put(req, r); }).catch(() => {})); // refresh for the next start
-      return hit;
+    const fresh = same && (req.mode === 'navigate' || /\.(js|css|html)$/.test(url.pathname) || url.pathname.endsWith('/'));
+    if (fresh) {
+      try {
+        const r = await fetch(req);
+        if (r.ok) c.put(req, r.clone());
+        return r;
+      } catch (err) {
+        const old = await c.match(req, { ignoreSearch: true }) || (req.mode === 'navigate' ? await c.match('index.html') : null);
+        if (old) return old;
+        throw err;
+      }
     }
+    const hit = await c.match(req, { ignoreSearch: same }); // ?p=PIN must still hit the cached shell
+    if (hit) return hit;
     try {
       const r = await fetch(req);
       if (r.ok || r.type === 'opaque') c.put(req, r.clone());

@@ -21,7 +21,7 @@ function toWrites(op, a, tree, who) {
     case 'createParty': {
       const codes = a.codes ?? [];
       const value = { name: a.name ?? 'Test', admin: uid, createdAt: NOW };
-      if (codes.length) value.codes = Object.fromEntries(codes.map((c, i) => [c, NOW + i]));
+      if (codes.length) value.codes = Object.fromEntries(codes.map((c, i) => [c, i]));
       return [{ path: P, value }, ...codes.map(c => ({ path: ['codes', c], value: a.pid ?? PID }))];
     }
     case 'addCode': return [{ path: ['codes', a.code], value: PID }, { path: [...P, 'codes', a.code], value: NOW }];
@@ -31,12 +31,16 @@ function toWrites(op, a, tree, who) {
       return [{ path: [...P, 'friends', a.f], value: v }];
     }
     case 'setMax': return [{ path: [...P, 'friends', a.f, 'max'], value: a.max }];
+    case 'addMe': return [{ path: [...P, 'friends', a.f], value: { name: a.name, createdAt: NOW } }, { path: [...P, 'claims', a.f], value: uid }, { path: [...P, 'members', uid], value: a.f }];
     case 'removeFriend': {
-      const w = [{ path: [...P, 'friends', a.f], value: null }, { path: [...P, 'claims', a.f], value: null }];
+      const w = [{ path: [...P, 'friends', a.f], value: null }];
       for (const [id, d] of Object.entries(party?.doses ?? {})) if (d.friendId === a.f) w.push({ path: [...P, 'doses', id], value: null });
       const owner = party?.claims?.[a.f];
-      if (owner) w.push({ path: [...P, 'members', owner], value: null });
+      if (owner) w.push({ path: [...P, 'claims', a.f], value: null }, { path: [...P, 'members', owner], value: null });
       return w;
+    }
+    case 'delClaimOnly': { // what the old adapter did for an unclaimed friend
+      return [{ path: [...P, 'friends', a.f], value: null }, { path: [...P, 'claims', a.f], value: null }];
     }
     case 'addDose': return [{ path: [...P, 'doses', a.d], value: { friendId: a.f, size: a.size ?? 1, t: a.t ?? NOW, addedAt: NOW } }];
     case 'setT': return [{ path: [...P, 'doses', a.d, 't'], value: a.t }];
@@ -64,6 +68,7 @@ function toHttp(op, a, ids) {
     case 'addCode': return ['POST', `${base}/codes`, { code: a.code, createdAt: NOW }];
     case 'addFriend': return ['POST', `${base}/friends`, { name: a.name, createdAt: NOW, ...(a.max !== undefined ? { max: a.max } : {}) }, 'f:' + a.f];
     case 'setMax': return ['PATCH', `${base}/friends/${fid(a.f)}`, { max: a.max }];
+    case 'addMe': return ['POST', `${base}/friends`, { name: a.name, claim: true }, 'f:' + a.f];
     case 'removeFriend': return ['DELETE', `${base}/friends/${fid(a.f)}`];
     case 'addDose': return ['POST', `${base}/doses`, { id: a.d, friendId: fid(a.f), size: a.size ?? 1, t: a.t ?? NOW, addedAt: NOW }, 'd:' + a.d];
     case 'setT': return ['PATCH', `${base}/doses/${did(a.d)}`, { t: a.t }];
@@ -71,6 +76,7 @@ function toHttp(op, a, ids) {
     case 'delDose': return ['DELETE', `${base}/doses/${did(a.d)}`];
     case 'claim': return ['POST', `${base}/claims`, { friendId: fid(a.f) }];
     case 'release': return ['DELETE', `${base}/claims/${fid(a.f)}`];
+    case 'delClaimOnly': return ['DELETE', `${base}/claims/${fid(a.f)}`]; // a claim that does not exist cannot be deleted
     case 'close': return ['POST', `${base}/close`, {}];
     case 'rename': return ['PATCH', `${base}/friends/${fid(a.f)}`, { name: a.name }];
     case 'delCode': return ['DELETE', `${base}/codes/${a.code}`];
@@ -108,14 +114,14 @@ const longName = 'x'.repeat(15);
 
 test('parity: party creation, codes, friends, max', async () => {
   await run([
-    ['admin', 'createParty', { codes: ['8209'] }, 'ok'],
+    ['admin', 'createParty', { codes: ['Tok8209Alpha'] }, 'ok'],
     ['alice', 'createParty', { codes: [] }, 'deny'], // same id exists
-    ['bob', 'createParty', { pid: 'party-test-0002', codes: ['8209'] }, 'deny'], // taken PIN
+    ['bob', 'createParty', { pid: 'party-test-0002', codes: ['Tok8209Alpha'] }, 'deny'], // taken PIN
     ['bob', 'createParty', { pid: 'party-test-0003', codes: ['12'] }, 'deny'], // not 4 digits
     ['bob', 'createParty', { pid: 'party-test-0004', codes: ['abcd'] }, 'deny'],
     ['bob', 'createParty', { pid: 'party-test-0005', name: '' }, 'deny'],
     ['bob', 'createParty', { pid: 'party-test-0006', name: 'y'.repeat(31) }, 'deny'],
-    ['bob', 'createParty', { pid: 'party-test-0007', name: 'y'.repeat(30), codes: ['1111'] }, 'ok'],
+    ['bob', 'createParty', { pid: 'party-test-0007', name: 'y'.repeat(30), codes: ['Tok1111Alpha'] }, 'ok'],
     ['alice', 'addFriend', { f: 'f1', name: 'Sanne' }, 'deny'],
     ['admin', 'addFriend', { f: 'f1', name: 'Sanne' }, 'ok'],
     ['admin', 'addFriend', { f: 'f2', name: longName }, 'deny'],
@@ -127,27 +133,27 @@ test('parity: party creation, codes, friends, max', async () => {
     ['admin', 'setMax', { f: 'f1', max: 21 }, 'deny'],
     ['admin', 'setMax', { f: 'f1', max: 0.1 }, 'deny'],
     ['admin', 'setMax', { f: 'f1', max: null }, 'ok'],
-    ['bob', 'addCode', { code: '7815' }, 'deny'], // non-admin adds a PIN
-    ['admin', 'addCode', { code: '7815' }, 'ok'],
-    ['admin', 'addCode', { code: '8209' }, 'deny'], // taken
-    ['admin', 'addCode', { code: '1111' }, 'deny'], // taken by another party
+    ['bob', 'addCode', { code: 'Tok7815Alpha' }, 'deny'], // non-admin adds a PIN
+    ['admin', 'addCode', { code: 'Tok7815Alpha' }, 'ok'],
+    ['admin', 'addCode', { code: 'Tok8209Alpha' }, 'deny'], // taken
+    ['admin', 'addCode', { code: 'Tok1111Alpha' }, 'deny'], // taken by another party
     ['admin', 'addCode', { code: 'abcd' }, 'deny'],
     ['admin', 'addCode', { code: '123' }, 'deny'],
     ['alice', 'rename', { f: 'f1', name: 'Hacked' }, 'deny'],
     ['admin', 'rename', { f: 'f1', name: 'Sanne2' }, 'ok'],
     ['admin', 'rename', { f: 'f1', name: '' }, 'deny'],
     ['admin', 'rename', { f: 'f1', name: longName }, 'deny'],
-    ['bob', 'delCode', { code: '7815' }, 'deny'],
-    ['admin', 'delCode', { code: '7815' }, 'ok'],
-    ['admin', 'delCode', { code: '7815' }, 'deny'], // already gone
-    ['admin', 'addCode', { code: '7815' }, 'ok'], // free again
+    ['bob', 'delCode', { code: 'Tok7815Alpha' }, 'deny'],
+    ['admin', 'delCode', { code: 'Tok7815Alpha' }, 'ok'],
+    ['admin', 'delCode', { code: 'Tok7815Alpha' }, 'deny'], // already gone
+    ['admin', 'addCode', { code: 'Tok7815Alpha' }, 'ok'], // free again
     ['alice', 'close', {}, 'deny'],
     ['admin', 'close', {}, 'ok'],
     ['admin', 'close', {}, 'deny'],
     ['admin', 'addFriend', { f: 'f3', name: 'Daan' }, 'deny'],
     ['admin', 'setMax', { f: 'f1', max: 3 }, 'deny'],
-    ['admin', 'addCode', { code: '5555' }, 'deny'],
-    ['admin', 'delCode', { code: '7815' }, 'deny'], // closed = read-only
+    ['admin', 'addCode', { code: 'Tok5555Alpha' }, 'deny'],
+    ['admin', 'delCode', { code: 'Tok7815Alpha' }, 'ok'], // deleting codes stays allowed after closing
     ['admin', 'rename', { f: 'f1', name: 'Late' }, 'deny'],
     ['admin', 'removeFriend', { f: 'f1' }, 'deny'],
     ['admin', 'addDose', { d: 'd1', f: 'f1' }, 'deny'],
@@ -157,7 +163,7 @@ test('parity: party creation, codes, friends, max', async () => {
 
 test('parity: doses, validation, own-friend only, claims', async () => {
   await run([
-    ['admin', 'createParty', { codes: ['8209'] }, 'ok'],
+    ['admin', 'createParty', { codes: ['Tok8209Alpha'] }, 'ok'],
     ['admin', 'addFriend', { f: 'f1', name: 'Sanne' }, 'ok'],
     ['admin', 'addFriend', { f: 'f2', name: 'Joris' }, 'ok'],
     ['alice', 'addDose', { d: 'd0', f: 'f1' }, 'deny'], // no claim yet
@@ -204,7 +210,16 @@ test('parity: doses, validation, own-friend only, claims', async () => {
     // friend removal cascades and drops the claim
     ['alice', 'removeFriend', { f: 'f1' }, 'deny'],
     ['bob', 'removeFriend', { f: 'f1' }, 'deny'],
-    ['admin', 'removeFriend', { f: 'f1' }, 'ok'],
+    ['admin', 'removeFriend', { f: 'f1' }, 'ok'], // claimed friend: friend + claim + member + doses in one go
+    ['admin', 'addFriend', { f: 'f3', name: 'Daan' }, 'ok'],
+    ['admin', 'delClaimOnly', { f: 'f3' }, 'deny'], // deleting a claim that does not exist is rejected by both
+    ['admin', 'removeFriend', { f: 'f3' }, 'ok'], // unclaimed friend: only the friend path
+    ['alice', 'addMe', { f: 'f8', name: 'Hack' }, 'deny'], // non-admin cannot add a friend, claim or not
+    ['admin', 'addMe', { f: 'f9', name: 'Michel' }, 'ok'], // admin: own name + claim + member in one atomic write
+    ['admin', 'addMe', { f: 'f10', name: 'Twee' }, 'deny'], // the admin already has a claim in this party
+    ['admin', 'addDose', { d: 'dm', f: 'f9' }, 'ok'],
+    ['admin', 'release', { f: 'f9' }, 'ok'],
+    ['admin', 'addMe', { f: 'f11', name: 'Weer' }, 'ok'], // free again after releasing
     ['bob', 'addDose', { d: 'd8', f: 'f1' }, 'deny'],
     ['admin', 'addDose', { d: 'd9', f: 'f1' }, 'deny'],
     ['bob', 'claim', { f: 'f2' }, 'ok'], // bob is free again
@@ -226,9 +241,9 @@ test('rules: reads — party/code by direct get, no listing', () => {
   assert.equal(checkRead(rules, tree, ['codes'], a), false);
   assert.equal(checkRead(rules, tree, [], a), false);
   assert.equal(checkRead(rules, tree, ['parties', PID], a), true);
-  assert.equal(checkRead(rules, tree, ['codes', '8209'], a), true);
+  assert.equal(checkRead(rules, tree, ['codes', 'Tok8209Alpha'], a), true);
   assert.equal(checkRead(rules, tree, ['parties', PID], null), false);
-  assert.equal(checkRead(rules, tree, ['codes', '8209'], null), false);
+  assert.equal(checkRead(rules, tree, ['codes', 'Tok8209Alpha'], null), false);
 });
 
 test('rules: unauthenticated writes are denied; admin cannot be spoofed', () => {
@@ -239,9 +254,9 @@ test('rules: unauthenticated writes are denied; admin cannot be spoofed', () => 
   // changing admin afterwards is not possible, not even for the admin
   assert.equal(checkUpdate(rules, tree, [{ path: ['parties', PID, 'admin'], value: 'b' }], { uid: 'a' }, NOW), false);
   // codes are never overwritten or deleted by anyone
-  assert.equal(checkUpdate(rules, tree, [{ path: ['codes', '8209'], value: PID }, { path: ['parties', PID, 'codes', '8209'], value: NOW }], { uid: 'a' }, NOW), true);
-  assert.equal(checkUpdate(rules, tree, [{ path: ['codes', '8209'], value: null }], { uid: 'a' }, NOW), false);
-  assert.equal(checkUpdate(rules, tree, [{ path: ['codes', '8209'], value: PID }], { uid: 'a' }, NOW), false);
+  assert.equal(checkUpdate(rules, tree, [{ path: ['codes', 'Tok8209Alpha'], value: PID }, { path: ['parties', PID, 'codes', 'Tok8209Alpha'], value: NOW }], { uid: 'a' }, NOW), true);
+  assert.equal(checkUpdate(rules, tree, [{ path: ['codes', 'Tok8209Alpha'], value: null }], { uid: 'a' }, NOW), false);
+  assert.equal(checkUpdate(rules, tree, [{ path: ['codes', 'Tok8209Alpha'], value: PID }], { uid: 'a' }, NOW), false);
   // a stranger cannot attach a code to someone else's party
-  assert.equal(checkUpdate(rules, tree, [{ path: ['codes', '4444'], value: PID }], { uid: 'mallory' }, NOW), false);
+  assert.equal(checkUpdate(rules, tree, [{ path: ['codes', 'Tok4444Alpha'], value: PID }], { uid: 'mallory' }, NOW), false);
 });

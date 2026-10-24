@@ -12,7 +12,7 @@ function world() {
   const A = { uid: 'adm' }, U = { uid: 'usr' };
   const ok = (writes, auth = A) => checkUpdate(rules, tree, writes, auth, NOW);
   const P = ['parties', PID];
-  assert.ok(ok([{ path: P, value: { name: 'N', admin: 'adm', createdAt: NOW, codes: { 8209: NOW } } }, { path: ['codes', '8209'], value: PID }]));
+  assert.ok(ok([{ path: P, value: { name: 'N', admin: 'adm', createdAt: NOW, codes: { Tok8209Alpha: NOW } } }, { path: ['codes', 'Tok8209Alpha'], value: PID }]));
   assert.ok(ok([{ path: [...P, 'friends', 'f1'], value: { name: 'Sanne', createdAt: NOW } }, { path: [...P, 'friends', 'f2'], value: { name: 'Joris', createdAt: NOW } }]));
   assert.ok(ok([{ path: [...P, 'claims', 'f1'], value: 'usr' }, { path: [...P, 'members', 'usr'], value: 'f1' }], U));
   assert.ok(ok([{ path: [...P, 'doses', 'd1'], value: { friendId: 'f1', size: 1, t: NOW, addedAt: NOW } }], U));
@@ -28,7 +28,7 @@ test('rules: keys and values must be HTML-safe', () => {
   assert.equal(ok([{ path: [...P, 'friends', 'a b'], value: { name: 'X', createdAt: NOW } }]), false);
   assert.equal(ok([{ path: [...P, 'doses', evil], value: { friendId: 'f1', size: 1, t: NOW, addedAt: NOW } }], U), false);
   assert.equal(ok([{ path: [...P, 'doses', "x'y"], value: { friendId: 'f1', size: 1, t: NOW, addedAt: NOW } }], A), false);
-  assert.equal(ok([{ path: ['codes', '1234'], value: evil }, { path: [...P, 'codes', '1234'], value: NOW }]), false);
+  assert.equal(ok([{ path: ['codes', 'Tok1234Alpha'], value: evil }, { path: [...P, 'codes', 'Tok1234Alpha'], value: NOW }]), false);
   assert.equal(ok([{ path: [...P, 'members', evil], value: 'f2' }], { uid: evil }), false);
   assert.equal(ok([{ path: [...P, 'friends', 'f9'], value: { name: 'X', createdAt: NOW, photo: 'x' } }]), false); // unknown field
   assert.equal(ok([{ path: [...P, 'friends', 'f9'], value: { name: 'X', createdAt: NOW } }]), true); // sanity: normal ids still work
@@ -56,12 +56,12 @@ test('rules: creation cannot seed claims, members, doses or closedAt', () => {
 
 test('rules: party codes and root codes always pair', () => {
   const { P, ok } = world();
-  assert.equal(ok([{ path: [...P, 'codes', '1111'], value: NOW }]), false); // party entry without root entry
-  assert.equal(ok([{ path: ['codes', '2222'], value: PID }]), false); // root entry without party entry
-  assert.equal(ok([{ path: ['codes', '3333'], value: PID }, { path: [...P, 'codes', '3333'], value: NOW }]), true);
-  assert.equal(ok([{ path: ['codes', '3333'], value: null }]), false); // only the root half
-  assert.equal(ok([{ path: ['codes', '3333'], value: null }, { path: [...P, 'codes', '3333'], value: null }]), true);
-  assert.equal(ok([{ path: ['codes', '8209'], value: null }, { path: [...P, 'codes', '8209'], value: null }], { uid: 'usr' }), false); // not admin
+  assert.equal(ok([{ path: [...P, 'codes', 'Tok1111Alpha'], value: NOW }]), false); // party entry without root entry
+  assert.equal(ok([{ path: ['codes', 'Tok2222Alpha'], value: PID }]), false); // root entry without party entry
+  assert.equal(ok([{ path: ['codes', 'Tok3333Alpha'], value: PID }, { path: [...P, 'codes', 'Tok3333Alpha'], value: NOW }]), true);
+  assert.equal(ok([{ path: ['codes', 'Tok3333Alpha'], value: null }]), false); // only the root half
+  assert.equal(ok([{ path: ['codes', 'Tok3333Alpha'], value: null }, { path: [...P, 'codes', 'Tok3333Alpha'], value: null }]), true);
+  assert.equal(ok([{ path: ['codes', 'Tok8209Alpha'], value: null }, { path: [...P, 'codes', 'Tok8209Alpha'], value: null }], { uid: 'usr' }), false); // not admin
 });
 
 test('rules: claims and members stay paired; nobody can half-delete', () => {
@@ -87,4 +87,21 @@ test('rules: friend rename is admin-only and validated; dose fields cannot be de
   }
   assert.equal(ok([{ path: [...P, 'doses', 'd1', 't'], value: NOW - 60000 }], U), true); // editing is fine
   assert.equal(ok([{ path: [...P, 'doses', 'd1'], value: null }], U), true); // deleting the whole dose too
+});
+
+test('rules: a party code cannot be deleted alone; the admin may delete both after closing; creating stays closed-only', () => {
+  const { A, U, P, ok } = world();
+  assert.equal(ok([{ path: [...P, 'codes', 'Tok8209Alpha'], value: null }], A), false); // party half only: would orphan codes/8209
+  assert.equal(ok([{ path: ['codes', 'Tok8209Alpha'], value: null }, { path: [...P, 'codes', 'Tok8209Alpha'], value: null }], U), false); // not the admin
+  assert.equal(ok([{ path: [...P, 'closedAt'], value: NOW }], A), true);
+  assert.equal(ok([{ path: ['codes', 'Tok5555Alpha'], value: PID }, { path: [...P, 'codes', 'Tok5555Alpha'], value: NOW }], A), false); // no new codes after closing
+  assert.equal(ok([{ path: ['codes', 'Tok8209Alpha'], value: null }, { path: [...P, 'codes', 'Tok8209Alpha'], value: null }], A), true); // deleting still works
+});
+
+test('rules: the admin may add their own name and claim it in one atomic write; a claim without the friend is rejected', () => {
+  const { A, U, P, ok } = world();
+  assert.equal(ok([{ path: [...P, 'friends', 'fm'], value: { name: 'Michel', createdAt: NOW } }, { path: [...P, 'claims', 'fm'], value: 'adm' }, { path: [...P, 'members', 'adm'], value: 'fm' }], A), true);
+  assert.equal(ok([{ path: [...P, 'claims', 'ghost'], value: 'adm' }, { path: [...P, 'members', 'adm'], value: 'ghost' }], A), false); // friend does not exist
+  assert.equal(ok([{ path: [...P, 'friends', 'fx'], value: { name: 'Sneaky', createdAt: NOW } }, { path: [...P, 'claims', 'fx'], value: 'usr2' }, { path: [...P, 'members', 'usr2'], value: 'fx' }], { uid: 'usr2' }), false); // non-admin cannot create the friend
+  assert.equal(ok([{ path: [...P, 'friends', 'fy'], value: { name: 'Two', createdAt: NOW } }, { path: [...P, 'claims', 'fy'], value: 'adm' }, { path: [...P, 'members', 'adm'], value: 'fy' }], A), false); // admin already has a claim now
 });

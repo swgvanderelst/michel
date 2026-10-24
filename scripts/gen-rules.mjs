@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 
 const KEY = '/^[-_A-Za-z0-9]{1,32}$/'; // every client-chosen key/id/uid: safe to put in HTML attributes
+const TOKEN = '/^[A-Za-z0-9]{10,32}$/'; // join tokens: 12 random chars, never typed
 const P = "root.child('parties').child($pid)"; // old state of this party
 const OPEN = `!${P}.child('closedAt').exists()`;
 const ADMIN = `auth.uid === ${P}.child('admin').val()`;
@@ -26,10 +27,10 @@ const rules = {
         '.write': 'auth != null && ('
           // create: free code, for a party I administer, and the party lists it too
           + `(!data.exists() && newData.isString() && ${CODE_PARTY}.child('admin').val() === auth.uid && !${CODE_PARTY}.child('closedAt').exists() && ${CODE_PARTY}.child('codes').child($code).exists())`
-          // delete: admin of an open party, together with the party's own entry
-          + " || (data.exists() && !newData.exists() && root.child('parties').child(data.val()).child('admin').val() === auth.uid && !root.child('parties').child(data.val()).child('closedAt').exists()"
+          // delete: admin (also after closing), together with the party's own entry
+          + " || (data.exists() && !newData.exists() && root.child('parties').child(data.val()).child('admin').val() === auth.uid"
           + ` && !${NR}.child('parties').child(data.val()).child('codes').child($code).exists()))`,
-        '.validate': `$code.matches(/^[0-9]{4}$/) && newData.isString() && newData.val().matches(${KEY})`,
+        '.validate': `$code.matches(${TOKEN}) && newData.isString() && newData.val().matches(${KEY})`,
       },
     },
     parties: {
@@ -48,9 +49,10 @@ const rules = {
         },
         codes: {
           $c: {
-            '.write': `auth != null && ${ADMIN} && ${OPEN}`,
+            // create only while open; delete also after closing, but only together with the root codes/$c
+            '.write': `auth != null && ${ADMIN} && (${OPEN} || !newData.exists()) && (newData.exists() || !newData.parent().parent().parent().parent().child('codes').child($c).exists())`,
             // must pair with codes/$c -> this party (checked on the data after the write)
-            '.validate': `$c.matches(/^[0-9]{4}$/) && ${TIME} && newData.parent().parent().parent().parent().child('codes').child($c).val() === $pid`,
+            '.validate': `$c.matches(${TOKEN}) && newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 300000 && newData.parent().parent().parent().parent().child('codes').child($c).val() === $pid`,
           },
         },
         friends: {

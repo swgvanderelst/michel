@@ -10,7 +10,7 @@ const srv = await startServer({ port: 0, seed: true });
 const base = `http://localhost:${srv.port}`;
 const H = { 'x-uid': 'dev-admin', 'x-secret': 'dev-admin-secret', 'content-type': 'application/json' };
 const api = (method, url, body) => fetch(base + '/api' + url, { method, headers: H, body: body && JSON.stringify(body) }).then(r => r.json());
-const PID = (await api('GET', '/codes/8209')).partyId;
+const CODE = srv.seed.code, PID = srv.seed.partyId;
 const party = await api('GET', '/parties/' + PID);
 const fid = n => Object.entries(party.friends).find(([, f]) => f.name === n)[0];
 const min = 60000, now = Date.now();
@@ -44,11 +44,11 @@ try {
   await page.close();
 
   const iphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
-  page = await newPage('?safe&p=8209', iphone);
+  page = await newPage(`?safe&p=${CODE}`, iphone);
   await sleep(1500); await shot(page, '02-install');
   await page.close();
 
-  page = await newPage('?safe&devuid=dev-admin&p=8209');
+  page = await newPage(`?safe&devuid=dev-admin&p=${CODE}`);
   await sleep(2600);
   await dismissAlarm(page);
   await shot(page, '03-wie-ben-jij');

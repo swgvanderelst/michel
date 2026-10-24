@@ -1,13 +1,14 @@
 // Smoke test against the REAL Firebase project (rules must be deployed first). Needs Edge + network.
-// Usage: MICHEL_PIN=1234 node tools/firebase-smoke.mjs
-//   MICHEL_PIN = a PIN of an existing party with at least two unclaimed friends (made by an allow-listed creator).
+// Usage: MICHEL_LINK='https://…/?p=TOKEN' node tools/firebase-smoke.mjs
+//   MICHEL_LINK = the join link (or bare token) of an existing party with at least two unclaimed friends (made by an allow-listed creator).
 // The page is served by a throwaway static server and forced onto Firebase with ?prod=1 (localhost is otherwise dev-only).
 // Each "phone" is its own browser context, so each gets its own anonymous Firebase user.
 import assert from 'node:assert/strict';
 import { startServer } from '../dev-server.mjs';
 import { launchEdge } from './edge.mjs';
 
-const PIN = process.env.MICHEL_PIN;
+import { tokenFromLink } from '../logic.js';
+const PIN = tokenFromLink(process.env.MICHEL_LINK); // join token
 const srv = await startServer({ port: 0 }); // only serves the static files here; the dev API is not used
 const base = `http://localhost:${srv.port}`;
 const { browser, close } = await launchEdge();
@@ -20,6 +21,8 @@ async function phone() {
   page.on('pageerror', e => logs.push('pageerror: ' + e.message));
   return { ctx, page };
 }
+// poll until fn() is truthy (no fixed sleeps: Firebase latency varies)
+const waitFor = async (fn, ms = 15000, what = 'condition') => { const t0 = Date.now(); for (;;) { try { const v = await fn(); if (v) return v; } catch { /* retry */ } if (Date.now() - t0 > ms) throw new Error('timeout waiting for ' + what); await sleep(250); } };
 const click = (page, sel) => page.evaluate(s => document.querySelector(s).click(), sel);
 const state = page => page.evaluate(() => window.__michel.state);
 const toastText = page => page.$eval('#toast', e => e.textContent);
@@ -47,7 +50,7 @@ try {
     assert.deepEqual((await state(A.page)).parties, []);
   });
 
-  if (!PIN) console.log('MICHEL_PIN not set: skipping join / claim / dose / sync / denied checks');
+  if (!PIN) console.log('MICHEL_LINK not set (or not a valid link): skipping join / claim / dose / sync / denied checks');
   else {
     let pid = null, friendA = null, friendB = null;
     const freeFriends = page => page.$$eval('[data-a=claim]', els => els.map(e => e.dataset.fid));
@@ -72,16 +75,12 @@ try {
       await A.page.click('[data-a=dose][data-size="0.25"]');
       await sleep(2500);
       await B.page.goto(`${base}/?prod=1&p=${PIN}`, { waitUntil: 'domcontentloaded' });
-      await sleep(5000);
-      assert.equal((await state(B.page)).current, pid);
-      const seen = await B.page.evaluate(() => document.body.innerText);
-      assert.match(seen, /Laatste:/i);
+      await waitFor(async () => (await state(B.page)).current === pid, 15000, 'B joined');
+      await waitFor(() => B.page.evaluate(() => /Laatste:/i.test(document.body.innerText)), 15000, 'B sees the first dose');
       // live push: A adds another, B must update without reload
       await A.page.click('.plus'); await sleep(500);
       await A.page.click('[data-a=dose][data-size="0.5"]');
-      await sleep(3500);
-      const totals = await B.page.$$eval('.card .tot', els => els.map(e => e.textContent));
-      assert.ok(totals.some(t => /¾/.test(t)), 'B should show 3/4 total: ' + totals.join('|'));
+      await waitFor(() => B.page.$$eval('.card .tot', els => els.some(e => /¾/.test(e.textContent))), 15000, 'B shows 3/4 total (live push)');
     });
 
     await step('phone B claims the other name; double claim of A\'s name is denied', async () => {

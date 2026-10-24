@@ -139,23 +139,41 @@ test('ranking: total beats time; backfill changes tiebreak; name last', () => {
   assert.deepEqual(L.ranking(fr, ds).map(x => x.friend.name), ['Big', 'Zed', 'Amy']);
 });
 
-test('codes: 4-digit PIN', () => {
-  assert.equal(L.normalizeCode('82 09'), '8209');
-  assert.equal(L.normalizeCode('820912'), '8209');
-  assert.equal(L.normalizeCode('ab'), '');
+test('join tokens: 10-32 alphanumerics', () => {
+  assert.equal(L.normalizeCode(' ab-C1_2 '), 'abC12');
+  assert.equal(L.normalizeCode('x'.repeat(40)).length, 32);
   assert.equal(L.normalizeCode(null), '');
-  assert.ok(L.isValidCode('0007'));
-  for (const bad of ['123', '12345', 'abcd', '', null, 1234]) assert.equal(L.isValidCode(bad), false);
-  assert.match(L.newPartyCode(), /^[0-9]{4}$/);
-  assert.equal(L.newPartyCode(() => 0), '0000');
-  assert.equal(L.newPartyCode(() => 0.99999), '9999');
+  assert.ok(L.isValidCode('AbCdEf123456'));
+  assert.ok(L.isValidCode('x'.repeat(32)));
+  for (const bad of ['8209', 'abc123', 'x'.repeat(33), 'AbCdEf12345!', '', null, 1234567890123]) assert.equal(L.isValidCode(bad), false);
 });
 
-test('newPartyCode re-rolls on collision', () => {
-  const seq = [0.1234, 0.1234, 0.5678];
-  let i = 0;
-  assert.equal(L.newPartyCode(() => seq[i++], ['1234']), '5678');
-  assert.throws(() => L.newPartyCode(() => 0, ['0000']));
+test('newToken: 12 chars from [A-Za-z0-9], unbiased, injectable randomness', () => {
+  assert.match(L.newToken(), /^[A-Za-z0-9]{12}$/);
+  assert.notEqual(L.newToken(), L.newToken());
+  assert.equal(L.newToken(5, n => new Uint8Array(n).fill(0)), 'AAAAA');
+  assert.equal(L.newToken(3, n => Uint8Array.from({ length: n }, (_, i) => (i % 2 ? 61 : 255))), '999'); // bytes >= 248 are rejected
+  assert.equal(L.newToken(2, n => new Uint8Array(n).fill(62)), 'AA'); // 62 % 62
+  const seen = new Set(); for (let i = 0; i < 200; i++) for (const ch of L.newToken(32)) seen.add(ch);
+  assert.ok(seen.size > 55);
+});
+
+test('tokenFromLink: link, bare token, junk', () => {
+  assert.equal(L.tokenFromLink('https://x.github.io/michel/?p=AbCdEf123456'), 'AbCdEf123456');
+  assert.equal(L.tokenFromLink('  https://x.github.io/michel/?foo=1&p=AbCdEf123456#x '), 'AbCdEf123456');
+  assert.equal(L.tokenFromLink('michel/?p=AbCdEf123456'), 'AbCdEf123456'); // not a full URL
+  assert.equal(L.tokenFromLink('AbCdEf123456'), 'AbCdEf123456');
+  assert.equal(L.tokenFromLink('https://x.github.io/michel/?p=8209'), ''); // old 4-digit pin
+  for (const bad of ['', null, 'hello world', 'https://x.github.io/michel/']) assert.equal(L.tokenFromLink(bad), '');
+});
+
+test('iconFor: stable per dose id, covers all four icons', () => {
+  assert.equal(L.iconFor('dose-1'), L.iconFor('dose-1'));
+  const seen = new Set();
+  for (let i = 0; i < 200; i++) seen.add(L.iconFor('d' + i));
+  assert.deepEqual([...seen].sort(), ['disco', 'eyes', 'rocket', 'shades']);
+  assert.ok(L.ICONS.includes(L.iconFor('')));
+  assert.equal(L.iconFor(12345), L.iconFor('12345'));
 });
 
 test('newId', () => {
@@ -302,4 +320,27 @@ test('alarm tempo: starts at 138, +6 per bar, capped at 200', () => {
   assert.equal(L.bpmAt(L.CAP_STEP + 1000), 200);
   assert.ok(L.bpmAt(L.CAP_STEP - 1) < 200);
   assert.equal(L.CAP_STEP, 166);
+});
+
+test('retime across midnight: 23:50 on the 24th edited to 00:10 at 00:30 becomes the 25th 00:10', () => {
+  const orig = new Date(2026, 9, 24, 23, 50).getTime();
+  const now = new Date(2026, 9, 25, 0, 30).getTime();
+  const r = L.retime('00:10', orig, now);
+  assert.equal(r, new Date(2026, 9, 25, 0, 10).getTime());
+  // and the other way: 00:10 on the 25th edited back to 23:55 stays on the 24th
+  assert.equal(L.retime('23:55', new Date(2026, 9, 25, 0, 10).getTime(), now), new Date(2026, 9, 24, 23, 55).getTime());
+  assert.equal(L.retime('23:50', orig, new Date(2026, 9, 24, 23, 40).getTime()), new Date(2026, 9, 23, 23, 50).getTime()); // never in the future
+});
+
+test('alarmGate: live snapshot, or cache when offline / after 5 s without a snapshot', () => {
+  assert.equal(L.alarmGate({ live: true, hasCache: false, online: true, uptimeMs: 0 }), true);
+  assert.equal(L.alarmGate({ live: false, hasCache: true, online: true, uptimeMs: 1000 }), false); // fresh start, wait for the server
+  assert.equal(L.alarmGate({ live: false, hasCache: true, online: false, uptimeMs: 1000 }), true); // offline cold start
+  assert.equal(L.alarmGate({ live: false, hasCache: true, online: true, uptimeMs: 5001 }), true); // no snapshot after 5 s
+  assert.equal(L.alarmGate({ live: false, hasCache: false, online: false, uptimeMs: 99999 }), false); // nothing to alarm on
+});
+
+test('normalizeParty orders codes by the stored order (0 = main), not alphabetically', () => {
+  const p = L.normalizeParty('p', { name: 'N', admin: 'u', createdAt: 1, codes: { 7815: 1, 8209: 0 } });
+  assert.deepEqual(p.codes, ['8209', '7815']);
 });

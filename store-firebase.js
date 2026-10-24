@@ -46,7 +46,7 @@ export async function createStore(config) {
     watch(pid, cb, onErr) { return onValue(R('parties/' + pid), s => cb(s.val()), e => onErr && onErr(e)); },
     async createParty({ id, name, codes }) {
       const party = { name, admin: uid, createdAt: ts() };
-      if (codes.length) party.codes = Object.fromEntries(codes.map(c => [c, ts()]));
+      if (codes.length) party.codes = Object.fromEntries(codes.map((c, i) => [c, i])); // value = order, 0 = main code
       const u = { ['parties/' + id]: party };
       for (const c of codes) u['codes/' + c] = id;
       try { await multi(u); } catch (e) {
@@ -66,12 +66,20 @@ export async function createStore(config) {
       await wrap(() => set(r, { name, createdAt: ts(), ...(max != null ? { max } : {}) }));
       return r.key;
     },
+    // admin adds their own name and claims it: friend + claim + member in one atomic write
+    async addFriendAndClaim(pid, name) {
+      const key = push(R(`parties/${pid}/friends`)).key;
+      await multi({ [`parties/${pid}/friends/${key}`]: { name, createdAt: ts() }, [`parties/${pid}/claims/${key}`]: uid, [`parties/${pid}/members/${uid}`]: key });
+      return key;
+    },
+    renameFriend: (pid, fid, name) => wrap(() => set(R(`parties/${pid}/friends/${fid}/name`), name)),
     setMax: (pid, fid, max) => wrap(() => set(R(`parties/${pid}/friends/${fid}/max`), max)),
     removeFriend(pid, party, fid) {
-      const u = { [`parties/${pid}/friends/${fid}`]: null, [`parties/${pid}/claims/${fid}`]: null };
-      for (const x of party.doses) if (x.friendId === fid) u[`parties/${pid}/doses/${x.id}`] = null;
+      // the rules only allow deleting claims/members that exist, so include them only for a claimed friend
+      const u = { [`parties/${pid}/friends/${fid}`]: null };
+      for (const x of party.doses) if (x.friendId === fid && !x.pending) u[`parties/${pid}/doses/${x.id}`] = null;
       const owner = party.claims[fid];
-      if (owner) u[`parties/${pid}/members/${owner}`] = null;
+      if (owner) { u[`parties/${pid}/claims/${fid}`] = null; u[`parties/${pid}/members/${owner}`] = null; }
       return multi(u);
     },
     newDoseId: pid => push(R(`parties/${pid}/doses`)).key,
@@ -80,6 +88,7 @@ export async function createStore(config) {
       await wrap(() => set(R(`parties/${pid}/doses/${id}`), { friendId, size, t, addedAt: ts() }));
       return id;
     },
+    hasDose: (pid, did) => wrap(async () => (await get(R(`parties/${pid}/doses/${did}`))).exists()),
     setDoseTime: (pid, did, t) => wrap(() => set(R(`parties/${pid}/doses/${did}/t`), t)),
     removeDose: (pid, did) => wrap(() => set(R(`parties/${pid}/doses/${did}`), null)),
     claim: (pid, fid) => multi({ [`parties/${pid}/claims/${fid}`]: uid, [`parties/${pid}/members/${uid}`]: fid }),

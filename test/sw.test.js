@@ -31,3 +31,26 @@ test('sw.js: parses, cleans old caches, never touches API or Firebase traffic', 
   assert.equal(responded, true);
   await new Promise(r => setTimeout(r, 20));
 });
+
+test('sw.js: network-first for navigations and same-origin js/css, cache fallback when offline', async () => {
+  const handlers = {};
+  const store = new Map([['https://x.github.io/app.js', 'OLD-JS'], ['https://x.github.io/icon-192.png', 'CACHED-ICON']]);
+  const cache = {
+    match: async r => { const v = store.get(typeof r === 'string' ? 'https://x.github.io/' + r : r.url); return v ? { v } : undefined; },
+    put: async (r, res) => { store.set(r.url, res.v); },
+  };
+  let online = true;
+  const ctx = {
+    self: { addEventListener: (t, f) => { handlers[t] = f; }, location: { origin: 'https://x.github.io' }, skipWaiting() {}, clients: { claim() {} } },
+    caches: { open: async () => cache }, Request: class {}, Response,
+    fetch: async () => { if (!online) throw new Error('offline'); return { ok: true, v: 'NEW', clone() { return this; } }; },
+    URL,
+  };
+  vm.runInNewContext(src, ctx);
+  const ask = async (url, mode = 'cors') => { let p; handlers.fetch({ request: { method: 'GET', url, mode }, respondWith: x => { p = x; }, waitUntil() {} }); return (await p).v; };
+  assert.equal(await ask('https://x.github.io/app.js'), 'NEW'); // network wins: versions never mix
+  assert.equal(await ask('https://x.github.io/icon-192.png'), 'CACHED-ICON'); // static assets stay cache-first
+  online = false;
+  assert.equal(await ask('https://x.github.io/app.js'), 'NEW'); // fell back to what the last good load stored
+  assert.match(src, /michel-v2/);
+});

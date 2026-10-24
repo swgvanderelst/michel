@@ -5,22 +5,22 @@ import * as L from './logic.js';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const frac = L.frac, dur = L.dur, hhmm = L.hhmm;
-const DEFAULT_NAME = 'AWAKENINGS ADE 2026', DEFAULT_CODE = '8209', DEFAULT_EXTRA = '7815';
+const DEFAULT_NAME = 'AWAKENINGS ADE 2026';
 
-// ---------- splash: min 1.5 s, until first data (max 2 s), 200 ms fade; cold open only ----------
+// ---------- splash: min 3 s, until first data (max 5 s), 200 ms fade; cold open only ----------
 const splash = { ready: false, done: false };
 function hideSplash(force) {
   if (splash.done) return;
   const t = performance.now();
-  if (!force && !(t >= 1500 && splash.ready) && t < 2000) return;
+  if (!force && !(t >= 3000 && splash.ready) && t < 5000) return;
   splash.done = true;
   const el = $('#splash');
   if (!el) return;
   el.classList.add('out');
   setTimeout(() => el.remove(), 250);
 }
-setTimeout(() => hideSplash(), 1500);
-setTimeout(() => hideSplash(true), 2000);
+setTimeout(() => hideSplash(), 3000);
+setTimeout(() => hideSplash(true), 5000);
 const dataReady = () => { splash.ready = true; hideSplash(); };
 
 if (/[?&]safe\b/.test(location.search)) document.documentElement.classList.add('sim');
@@ -49,6 +49,15 @@ const ICON = {
   add: svg('<path d="M12 5v14M5 12h14"/>', 3.6),
   expand: svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', 2.6),
 };
+// small wait-state icons, picked per dose (iconFor): rocket, disco ball, sunglasses, big eyes
+const ICONSVG = {
+  rocket: '<svg class="ic" viewBox="0 0 64 64"><g class="rk"><path class="a" d="M32 3c10 8 13 21 11 36H21C19 24 22 11 32 3z"/><circle class="b" cx="32" cy="23" r="5.5"/><rect class="b" x="21" y="34" width="22" height="3.5"/><path class="a" d="M21 28L9 46l12-4zM43 28l12 18-12-4z"/><path class="a" d="M25 42h14l-7 19z"/></g></svg>',
+  disco: '<svg class="ic" viewBox="0 0 64 64"><rect class="a" x="30" y="2" width="4" height="13"/><circle class="a" cx="32" cy="37" r="22"/><g class="dg"><path class="s" d="M10 37h44M32 15v44M15 24c11 6 23 6 34 0M15 50c11-6 23-6 34 0M23 17c-6 13-6 25 0 40M41 17c6 13 6 25 0 40"/></g></svg>',
+  shades: '<svg class="ic" viewBox="0 0 64 64"><circle class="a" cx="32" cy="33" r="27"/><rect class="b" x="8" y="23" width="21" height="15" rx="6"/><rect class="b" x="35" y="23" width="21" height="15" rx="6"/><rect class="b" x="28" y="26" width="8" height="3.5"/><path class="s" d="M19 47c7 7 19 7 26 0"/></svg>',
+  eyes: '<svg class="ic" viewBox="0 0 64 64"><circle class="a" cx="32" cy="33" r="27"/><g class="bl"><circle class="s" cx="21" cy="28" r="10"/><circle class="s" cx="43" cy="28" r="10"/><circle class="b" cx="23" cy="29" r="4.5"/><circle class="b" cx="41" cy="29" r="4.5"/></g><ellipse class="b" cx="32" cy="50" rx="5" ry="4"/></svg>',
+};
+const waitIcon = (doseId, cls = '') => `<span class="wi ${cls}" aria-hidden="true">${ICONSVG[L.iconFor(doseId)]}</span>`;
+
 // admin-only marker: small yellow "M" badge (grey when this phone is not allowed)
 const mb = (on = true) => `<span class="mb ${on ? '' : 'grey'}" aria-label="Alleen De Michel">M</span>`;
 
@@ -128,8 +137,12 @@ function subscribe(pid) {
   const cached = ls.get('michel_cache_' + pid, null);
   if (cached) raw.set(pid, L.normalizeParty(pid, cached));
   unsubs.set(pid, store.watch(pid, snap => {
+    const first = !live.has(pid);
     live.add(pid);
     if (snap) {
+      // doses the server already has are confirmed: drop them from the outbox (unless a send is still in flight)
+      const drop = outbox.filter(e => e.pid === pid && snap.doses && snap.doses[e.id] && !inflight.has(pid + ':' + e.id));
+      if (drop.length) setOutbox(outbox.filter(e => !drop.includes(e)));
       raw.set(pid, L.normalizeParty(pid, snap));
       ls.set('michel_cache_' + pid, snap);
       const e = parties.find(x => x.id === pid);
@@ -138,6 +151,7 @@ function subscribe(pid) {
     if (pid === current) dataReady();
     render();
     tick();
+    if (first) replayOutbox();
   }, () => { if (pid === current) dataReady(); }));
 }
 
@@ -187,24 +201,6 @@ const nameLines = name => {
 const copyText = async text => {
   try { await nav.clipboard.writeText(text); return true; } catch { return false; }
 };
-
-// ---------- PIN input: one hidden input over 4 boxes ----------
-const pinCbs = {};
-const pinHtml = (id, value = '', cls = '') => `<div class="pin ${cls}" data-pin="${esc(id)}">${[0, 1, 2, 3].map(i => `<i class="${i === value.length ? 'cur' : ''}">${esc(value[i] || '')}</i>`).join('')}`
-  + `<input inputmode="numeric" pattern="[0-9]*" autocomplete="off" autocorrect="off" maxlength="4" value="${esc(value)}" aria-label="Code"></div>`;
-function pinPaint(root, v) {
-  root.querySelectorAll('i').forEach((b, i) => { b.textContent = v[i] || ''; b.classList.toggle('cur', i === Math.min(v.length, 3)); });
-}
-document.addEventListener('input', e => {
-  const inp = e.target.closest('.pin input'); if (!inp) return;
-  const root = inp.parentNode, v = L.normalizeCode(inp.value);
-  inp.value = v;
-  pinPaint(root, v);
-  const cb = pinCbs[root.dataset.pin]; if (cb) cb(v);
-});
-const pinValue = id => { const el = $(`.pin[data-pin="${id}"] input`); return el ? L.normalizeCode(el.value) : ''; };
-const pinSet = (id, v) => { const el = $(`.pin[data-pin="${id}"]`); if (el) { $('input', el).value = v; pinPaint(el, v); } };
-const pinFocus = id => { const i = $(`.pin[data-pin="${id}"] input`); if (i) i.focus(); };
 
 // ---------- pushed screens ----------
 const screens = []; // {key, el, build, label, live, noBack}
@@ -298,6 +294,7 @@ function titleBlock(p) {
     const px = Math.max(40, Math.min(75, Math.floor(330 / (n * 0.47))));
     return `<div class="lt"><div class="t pt" data-a="parties"><small>De Michel${p.closed ? ' · afgesloten' : ''}</small><b style="font-size:${px}px">${lines.map(esc).join('<br>')}${ICON.chev}</b></div></div>`;
   }
+  if (tab === 'top') return `<div class="lt"><div class="t sec"><b style="font-size:64px;line-height:.92;padding-bottom:8px">Wie gaat<br>het hardst</b></div></div>`;
   return `<div class="lt"><div class="t sec"><b>${TITLES[tab]}</b></div></div>`;
 }
 
@@ -313,7 +310,7 @@ function cardHtml(f, p, now) {
   const last = st.last ? `<div class="meta">Laatste: <b>${frac(st.last.size)}</b> om <b>${hhmm(st.last.t)}</b>${pend}</div>` : '';
   let body;
   if (st.kind === 'none') body = `<div class="lbl">Nog niks genomen</div><div class="meta">${can ? 'Tik om een snoepje toe te voegen' : 'Nog niks'}</div>`;
-  else if (st.kind === 'wait') body = `<div class="lbl">Bijpakken over</div><div class="cd" data-r="cd">${dur(st.rem)}</div><div class="bar"><i data-r="bar" style="width:${(st.p * 100).toFixed(1)}%"></i></div>${last}`;
+  else if (st.kind === 'wait') body = `<div class="lbl">Bijpakken over</div><div class="cdrow"><div class="cd" data-r="cd">${dur(st.rem)}</div>${waitIcon(st.last.id)}</div><div class="bar"><i data-r="bar" style="width:${(st.p * 100).toFixed(1)}%"></i></div>${last}`;
   else if (st.kind === 'due') body = `<div class="alarmtxt">Inkakken is bijpakken!</div><div class="over">+<span data-r="cd">${dur(st.over)}</span></div>${last}`;
   else body = `<div class="maxlbl">${ICON.check}Max bereikt</div>${last}`;
   const tag = mine ? `<span class="you">${isAdmin(p) ? 'DE MICHEL' : 'JIJ'}</span>` : '';
@@ -335,12 +332,13 @@ function topView(p) {
   const r = L.ranking(p.friends, p.doses);
   const all = L.total(p.doses);
   if (!all) return `<div class="pad"><div class="empty"><h2>Nog niks</h2><p>Zodra er iets genomen is, zie je hier wie aan kop ligt.</p></div></div>`;
-  const first = r[0], max = first.total;
+  const first = r[0], max = first.total, now = nowMs();
+  const ico = (x, cls) => { const st = L.status(dosesOf(p, x.friend.id), x.friend.max, now); return st.kind === 'wait' ? waitIcon(st.last.id, cls) : ''; };
   const rows = r.slice(1).map((x, i) => x.total
-    ? `<div class="rank"><div class="r1"><span class="rk">${i + 2}</span><span class="nm">${esc(x.friend.name)}</span><span class="tt">${frac(x.total)}</span></div><div class="bar"><i style="width:${(x.total / max * 100).toFixed(1)}%"></i></div></div>`
+    ? `<div class="rank"><div class="r1"><span class="rk">${i + 2}</span><span class="nm">${esc(x.friend.name)}${ico(x, 'sm')}</span><span class="tt">${frac(x.total)}</span></div><div class="bar"><i style="width:${(x.total / max * 100).toFixed(1)}%"></i></div></div>`
     : `<div class="rank zero"><div class="r1"><span class="rk">${i + 2}</span><span class="nm">${esc(x.friend.name)}</span><span class="tt">0</span></div></div>`).join('');
   return `<div class="pad"><div class="nightline"><span>Totaal vanavond</span><b>${frac(all)}</b></div>
-    <div class="first"><div class="rk">1</div><div class="nm"><small>Aan kop</small>${esc(first.friend.name)}</div><div class="tt">${frac(first.total)}</div></div>${rows}</div>`;
+    <div class="first"><div class="rk">1</div><div class="nm"><small>Aan kop</small>${esc(first.friend.name)}${ico(r[0], 'sm inv')}</div><div class="tt">${frac(first.total)}</div></div>${rows}</div>`;
 }
 
 function logView(p) {
@@ -354,8 +352,6 @@ function logView(p) {
 const sw = (a, on, dis) => `<button class="sw ${on ? 'on' : ''}" data-a="${a}" ${dis ? 'disabled' : ''} aria-pressed="${on}"></button>`;
 function settingsView(p) {
   const admin = isAdmin(p), me = meOf(p), meF = me && friendOf(p, me), open = !p.closed;
-  const codes = p.codes.length ? p.codes.map((c, i) => `<div class="pill"><span>${esc(c)}</span><small>${i === 0 ? 'Hoofdcode' : 'Extra'}</small>`
-    + `<button data-a="delcode" data-code="${esc(c)}" ${admin && open && p.codes.length > 1 ? '' : 'disabled'} aria-label="Code ${esc(c)} verwijderen">Wis</button></div>`).join('') : '<p class="note">Geen codes.</p>';
   const claimed = p.friends.filter(f => p.claims[f.id]);
   const claims = claimed.length
     ? claimed.map(f => `<div class="pill"><span>${esc(f.name)}</span><button data-a="release" data-fid="${esc(f.id)}" ${admin && open ? '' : 'disabled'}>Vrijgeven</button></div>`).join('')
@@ -366,9 +362,10 @@ function settingsView(p) {
     <div class="set"><div><b>Alarm voor iedereen ${mb(admin)}</b><small>${admin ? 'Uit = alleen het alarm voor je eigen naam' : 'Alleen De Michel. Jij krijgt het alarm voor je eigen naam.'}</small></div>${sw('allalarms', admin && settings.allAlarms, !admin)}</div>
     <div class="h3">Wie ben jij?</div>
     ${meF ? `<p class="note" style="margin-top:0">Jij bent <b>${esc(meF.name)}</b>.</p><button class="big ghost" data-a="notme" style="height:66px;font-size:24px" ${open ? '' : 'disabled'}>Ik ben iemand anders</button>`
-      : `<button class="big ghost" data-a="whoami" style="height:66px;font-size:24px" ${open ? '' : 'disabled'}>Wie ben jij?</button>`}
-    <div class="h3">Codes ${mb(admin)}</div>${codes}
-    <div class="lrow" style="margin-top:10px">${mb(admin)}<button class="big outline ${admin && open ? '' : 'off'}" style="margin-top:0;height:66px;font-size:24px" data-a="addcode">+ Extra code</button></div>
+      : `<button class="big ghost" data-a="whoami" style="height:66px;font-size:24px" ${open ? '' : 'disabled'}>${admin ? 'Kies mijn naam' : 'Wie ben jij?'}</button>`}
+    <div class="h3">Uitnodigingslink ${mb(admin)}</div>
+    <div class="lrow" style="margin-top:6px">${mb(admin)}<button class="big outline ${admin && open ? '' : 'off'}" style="margin-top:0;height:66px;font-size:24px" data-a="newlink">Nieuwe link maken</button></div>
+    <p class="note" style="margin-top:8px">De oude link en QR werken daarna niet meer.</p>
     <div class="h3">Gekozen namen ${mb(admin)}</div>${claims}
     <div class="h3">Feestje ${mb(admin)}</div>
     <div class="lrow" style="margin-top:6px">${mb(admin)}<button class="big danger ${admin && open ? '' : 'off'}" style="margin-top:0" data-a="closeparty">Feestje afsluiten</button></div>
@@ -413,8 +410,24 @@ function claimBuild() {
     <p class="lead">${admin ? 'Optioneel: ben jij zelf ook een van de vrienden?' : 'Kies je naam. Dan kun jij zelf snoepjes invoeren en krijg je alarm voor jezelf.'}</p>
     <div class="who2 pagewho" style="margin-top:16px">${btns}</div>
     ${p.friends.length ? '' : '<p class="note">Er zijn nog geen vrienden toegevoegd.</p>'}
+    ${admin ? `<div class="lrow" style="margin-top:12px">${mb()}<button class="big outline" style="margin-top:0" data-a="addme">+ Mijn naam toevoegen</button></div>` : ''}
     <p class="note">Staat je naam er niet tussen? Vraag De Michel.</p>
     <button class="big ghost" data-a="claimskip" style="margin-top:22px;height:62px;font-size:24px">${admin ? 'Sla over' : 'Later'}</button>`;
+}
+function openAddMe() {
+  sheet(`<div class="sh-name">Mijn naam</div><div class="sh-sub">Je wordt aan de crew toegevoegd en kiest meteen jezelf.</div>
+    <form id="addme"><input class="field" id="me-nm" maxlength="14" placeholder="Naam" autocomplete="off" autocapitalize="words" enterkeyhint="done">
+    <button class="big" type="submit">Toevoegen</button></form>`);
+  $('#me-nm').focus();
+}
+function openRename(fid) {
+  const p = P(), f = p && friendOf(p, fid); if (!f) return;
+  if (!isAdmin(p)) return adminOnly();
+  if (p.closed) return toast('Dit feestje is afgesloten');
+  sheet(`<div class="sh-name">Naam wijzigen</div>
+    <form id="renamef" data-fid="${esc(fid)}"><input class="field" id="rn-nm" maxlength="14" autocomplete="off" autocapitalize="words" enterkeyhint="done" value="${esc(f.name)}">
+    <button class="big" type="submit">Opslaan</button></form>`);
+  const i = $('#rn-nm'); i.focus(); i.select();
 }
 function openClaim() { pushScreen('claim', '', claimBuild, { live: true, noBack: true }); }
 function ensureClaimScreen() {
@@ -434,7 +447,7 @@ function openParties() {
   }).join('');
   sheet(`<div class="sh-name">Feestjes</div>${rows}
     <button class="big outline" data-a="newparty" style="margin-top:14px">+ Nieuw feestje</button>
-    <button class="big ghost" data-a="joinparty" style="height:66px;font-size:24px">Code invoeren</button>`);
+    <button class="big ghost" data-a="pastelink" style="height:66px;font-size:24px">Plak link</button>`);
 }
 
 function openWho() {
@@ -448,7 +461,7 @@ function openWho() {
   const now = nowMs();
   const btns = p.friends.map(f => {
     const st = L.status(dosesOf(p, f.id), f.max, now);
-    return `<button class="${st.kind === 'max' ? 'off' : ''}" data-a="pick" data-fid="${esc(f.id)}"><span>${esc(f.name)}</span>${st.kind === 'max' ? '<small>Max</small>' : ''}</button>`;
+    return `<button class="${st.kind === 'max' ? 'off' : ''}" data-a="pick" data-fid="${esc(f.id)}">${st.kind === 'wait' ? waitIcon(st.last.id, 'sm') : ''}<span>${esc(f.name)}</span>${st.kind === 'max' ? '<small>Max</small>' : ''}</button>`;
   }).join('');
   sheet(`<div class="sh-name">Voor wie?</div><div class="sh-sub">Tik op een naam</div><div class="who2">${btns}</div>
     ${admin ? `<div class="lrow" style="margin-top:12px">${mb()}<button class="big outline" style="margin-top:0" data-a="newfriend">+ Nieuwe vriend</button></div>` : ''}`);
@@ -513,10 +526,15 @@ function sendEntry(e, quickMs = 1500) {
   });
   return Promise.race([done, new Promise(r => setTimeout(() => r('pending'), quickMs))]);
 }
-function replayOutbox() {
+// replay only after the first live snapshot of that party, and never recreate a dose the server already has (or had and lost)
+async function replayOutbox() {
   if (!store) return;
   for (const e of outbox.slice()) {
     if (!parties.some(p => p.id === e.pid)) { setOutbox(L.outboxRemove(outbox, e.pid, e.id)); continue; }
+    if (!live.has(e.pid) || inflight.has(e.pid + ':' + e.id)) continue;
+    let exists;
+    try { exists = await store.hasDose(e.pid, e.id); } catch { continue; } // offline: try again later
+    if (exists) { setOutbox(L.outboxRemove(outbox, e.pid, e.id)); render(); continue; }
     sendEntry(e, 0);
   }
 }
@@ -564,7 +582,8 @@ function detailBuild(fid) {
     const hist = ds.length
       ? ds.map(d => can ? `<li data-did="${esc(d.id)}"><span class="t">${hhmm(d.t)}${d.pending ? ' <span class="pend">wordt verstuurd</span>' : ''}</span><span class="s">${frac(d.size)}</span>${ICON.right}</li>` : `<li class="ro"><span class="t">${hhmm(d.t)}</span><span class="s">${frac(d.size)}</span></li>`).join('')
       : '<li class="ro"><span class="t" style="color:var(--mut)">Nog niks</span></li>';
-    return `<div class="d-name">${esc(f.name)}</div>
+    return `<div class="d-name" ${admin && open ? `data-a="rename" data-fid="${esc(fid)}"` : ''}>${esc(f.name)}</div>
+      ${admin && open ? `<div class="lrow" style="margin-top:10px">${mb()}<button class="big outline" style="margin-top:0;height:56px;font-size:22px" data-a="rename" data-fid="${esc(fid)}">Naam wijzigen</button></div>` : ''}
       <div class="h3" style="margin-top:14px">Max per avond ${mb(admin)}</div>${stepper}
       <p class="note">Stappen van ¼. Standaard staat het op <b>GEEN MAX</b>: tik op − onder ¼ om de max weer uit te zetten.</p>
       ${can ? '<button class="big" data-a="adddose" style="margin-top:18px">Snoepje toevoegen</button>' : ''}
@@ -579,7 +598,6 @@ function openDetail(fid) {
 }
 
 // ---- QR ----
-let qrIndex = 0;
 function qrSvg(text, px) {
   const q = window.qrcode(0, 'H');
   q.addData(text); q.make();
@@ -590,55 +608,23 @@ function qrSvg(text, px) {
 }
 function shareBuild() {
   const p = P(); if (!p) return null;
-  if (qrIndex >= p.codes.length) qrIndex = 0;
-  const code = p.codes[qrIndex] || p.codes[0] || '', url = linkFor(p, code);
-  const others = p.codes.filter(c => c !== code);
+  const code = p.codes[0] || '', url = linkFor(p, code); // the QR always carries the main code's link; no PIN is shown on this screen
   const unclaimed = isAdmin(p) && p.friends.some(f => !p.claims[f.id]);
-  const chips = p.codes.length > 1 ? `<div class="qrchips">${p.codes.map((c, i) => `<button class="chip ${i === qrIndex ? 'on' : ''}" data-a="qrpick" data-i="${i}">${esc(c)}</button>`).join('')}</div>` : '';
+  if (!code) return `<h1 style="font-size:100px;margin-top:0">Delen</h1><p class="lead">De link is uitgeschakeld. ${isAdmin(p) && !p.closed ? 'Maak in Opties een nieuwe link.' : ''}</p>`;
   return `<h1 style="font-size:100px;margin-top:0">Delen</h1>
     <div class="qrcard" data-url="${esc(url)}">${code ? qrSvg(url, 260) : ''}</div>
-    ${chips}
     <button class="big ghost" data-a="qrfull" style="height:62px;font-size:24px">${ICON.expand}<span>Volledig scherm</span></button>
-    ${unclaimed ? `<p class="note">Nieuwe vriend? Voeg eerst zijn naam toe ${mb()}, laat hem dan scannen.</p>` : ''}
-    <div class="h3" style="margin-top:22px">${esc(p.name)} · code</div>
-    <div class="code">${esc(code || '----')}</div>
-    ${others.length ? `<div class="others">Ook te gebruiken: ${others.map(c => `<b>${esc(c)}</b>`).join(' · ')}</div>` : ''}
-    <div class="link">${esc(url.replace(/^https?:\/\//, ''))}</div>
-    <button class="big" data-a="doshare" style="margin-top:16px">${ICON.share}<span style="font-size:25px">Deel ${esc(p.name)}</span></button>
-    <div class="h3" style="margin-top:22px">Zo zet je vriend het op de iPhone</div>
-    <ol class="steps">
-      <li><span class="n">1</span><span>Open de link in <b>Safari</b></span></li>
-      <li><span class="n">2</span><span>Tik op <b>Deel</b> ${ICON.share}, dan <b>Zet op beginscherm</b></span></li>
-      <li><span class="n">3</span><span>Open <b>De Michel</b> vanaf je beginscherm</span></li>
-    </ol>`;
+    <button class="big" data-a="doshare" style="margin-top:12px"><span style="font-size:25px">Deel via WhatsApp</span></button>
+    ${unclaimed ? `<p class="note">Nieuwe vriend? Voeg eerst zijn naam toe ${mb()}, laat hem dan scannen.</p>` : ''}`;
 }
 function openQrFull() {
   const p = P(); if (!p) return;
-  const code = p.codes[qrIndex] || p.codes[0]; if (!code) return;
+  const code = p.codes[0]; if (!code) return;
   const el = document.createElement('div');
   el.id = 'qrfull';
-  el.innerHTML = qrSvg(linkFor(p, code), 400) + `<div class="qrpin">${esc(code)}</div><div class="qrhint">Tik om te sluiten</div>`;
+  el.innerHTML = qrSvg(linkFor(p, code), 400) + `<div class="qrhint">Tik om te sluiten</div>`;
   el.addEventListener('click', () => el.remove());
   document.body.appendChild(el);
-}
-
-function joinBuild() {
-  return () => `<h1 style="font-size:84px;margin-top:0">Code<br>invoeren</h1>
-    <p class="lead">Vraag de code van 4 cijfers aan De Michel van het feestje, of open de link die je kreeg.</p>
-    ${pinHtml('join', joinState.code)}
-    <button class="big xl off" id="joinbtn" data-a="join" style="margin-top:28px">Doe mee</button>`;
-}
-const joinState = { code: '', busy: false };
-function openJoin() {
-  closeSheet();
-  joinState.code = ''; joinState.busy = false;
-  pushScreen('join', 'Terug', joinBuild());
-  pinCbs.join = v => {
-    joinState.code = v;
-    const b = $('#joinbtn'); if (b) b.classList.toggle('off', v.length !== 4);
-    if (v.length === 4) joinWithCode(v);
-  };
-  pinFocus('join'); // synchronous, inside the tap: this is what opens the iOS keyboard
 }
 
 async function joinWithCode(code, silent) {
@@ -646,7 +632,7 @@ async function joinWithCode(code, silent) {
   joinState.busy = true;
   try {
     const pid = await store.resolveCode(code);
-    if (!pid) { toast('Onbekende code'); if (!silent) { pinSet('join', ''); joinState.code = ''; } return false; }
+    if (!pid) { if (!silent) toast('Deze link werkt niet (meer)'); return false; }
     let name = 'Feestje';
     try { const snap = await store.fetchParty(pid); if (snap) name = snap.name; } catch { /* name arrives via watch */ }
     addParty(pid, name);
@@ -656,63 +642,53 @@ async function joinWithCode(code, silent) {
     return true;
   } catch (e) { fail(e); return false; } finally { joinState.busy = false; }
 }
+const joinState = { busy: false };
 
-const newState = { name: DEFAULT_NAME, code: '', extra: '' };
+// "Plak link": read the clipboard; if that is not possible (or holds no link) offer a paste field
+async function pasteLink() {
+  let text = '';
+  try { text = await nav.clipboard.readText(); } catch { /* denied or unsupported */ }
+  const tok = L.tokenFromLink(text);
+  if (tok) return joinWithCode(tok);
+  closeSheet();
+  sheet(`<div class="sh-name">Plak link</div><div class="sh-sub">Plak hier de link die je van De Michel kreeg.</div>
+    <input class="field" id="paste-in" placeholder="https://…?p=…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="font-size:22px;text-transform:none">
+    <button class="big" data-a="pastego">Doe mee</button>`);
+  const inp = $('#paste-in'); if (inp) inp.focus();
+}
+
+const newState = { name: DEFAULT_NAME };
 function newPartyBuild() {
   return () => `<h1 style="margin-top:0">Nieuw<br>feestje</h1>
     <div class="h3" style="margin-top:0">Naam</div>
     <input class="field" id="np-name" maxlength="30" autocomplete="off" autocapitalize="characters" value="${esc(newState.name)}">
-    <div class="h3">Code (4 cijfers)</div>${pinHtml('np-code', newState.code, 'sm')}
-    <div class="h3">Extra code (optioneel)</div>${pinHtml('np-extra', newState.extra, 'sm')}
-    <p class="note">Jij wordt De Michel van dit feestje: alleen jij maakt vrienden aan, stelt max in en voegt codes toe. Iedereen met een code kan snoepjes invoeren.</p>
+    <p class="note">Jij wordt De Michel van dit feestje: alleen jij maakt vrienden aan, stelt max in en deelt de link of QR. Iedereen die de link of QR krijgt, kan meedoen en snoepjes invoeren.</p>
     <button class="big xl" data-a="createparty" style="margin-top:22px">Aanmaken</button>`;
 }
-async function openNewParty() {
+function openNewParty() {
   closeSheet();
-  Object.assign(newState, { name: DEFAULT_NAME, code: DEFAULT_CODE, extra: DEFAULT_EXTRA });
+  newState.name = DEFAULT_NAME;
   pushScreen('new', 'Terug', newPartyBuild());
-  // default codes already in use (second party on this backend): fall back to a random code
-  try {
-    if (await store.resolveCode(DEFAULT_CODE)) {
-      newState.code = L.newPartyCode(Math.random, [DEFAULT_CODE, DEFAULT_EXTRA]);
-      newState.extra = '';
-      pinSet('np-code', newState.code); pinSet('np-extra', '');
-      const n = $('#np-name'); if (n && n.value === DEFAULT_NAME) n.value = '';
-    }
-  } catch { /* offline: keep defaults */ }
 }
 
 async function createParty() {
   const name = $('#np-name').value.trim();
-  const code = pinValue('np-code'), extra = pinValue('np-extra');
   if (!name) return toast('Geef het feestje een naam');
-  if (!L.isValidCode(code)) return toast('De code moet 4 cijfers zijn');
-  if (extra && !L.isValidCode(extra)) return toast('De extra code moet 4 cijfers zijn');
-  if (extra && extra === code) return toast('Kies twee verschillende codes');
-  const codes = extra ? [code, extra] : [code];
   const id = L.newId();
-  try {
-    await store.createParty({ id, name, codes });
-  } catch (e) {
-    if (e && e.code === 'taken') return toast('Code is al bezet');
-    if (e && e.code === 'denied') return toast('Deze telefoon mag nog geen feestje maken. Stuur je telefoon-ID naar De Michel.');
-    return fail(e);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await store.createParty({ id, name, codes: [L.newToken()] }); // the join token is generated, nobody types it
+      break;
+    } catch (e) {
+      if (e && e.code === 'taken' && attempt < 2) continue;
+      if (e && e.code === 'denied') return toast('Deze telefoon mag nog geen feestje maken. Vraag De Michel om de link of QR, of stuur je telefoon-ID.');
+      return fail(e);
+    }
   }
   addParty(id, name);
   clearStack(); closeSheet();
   tab = 'crew';
   render();
-}
-
-function openExtraCode() {
-  const p = P(); if (!p) return;
-  if (!isAdmin(p)) return adminOnly();
-  if (p.closed) return toast('Dit feestje is afgesloten');
-  sheet(`<div class="sh-name">Extra code</div><div class="sh-sub">Kies een code van 4 cijfers. Daarmee komt iemand ook in dit feestje.</div>
-    ${pinHtml('extra', '', 'sm')}
-    <button class="big off" id="extrabtn" data-a="saveextra">Toevoegen</button>`);
-  pinCbs.extra = v => { const b = $('#extrabtn'); if (b) b.classList.toggle('off', v.length !== 4); };
-  pinFocus('extra');
 }
 
 // ---------- spelregels ----------
@@ -722,14 +698,15 @@ function rulesBuild() {
     <ul class="rl">
       <li>Iedereen kiest zijn eigen naam. Tik op de grote <b>+</b> om bij te pakken: kies <b>1</b>, <b>½</b> of <b>¼</b>, en de tijd (nu of eerder).</li>
       <li>Na een hele gaat na <b>2 uur</b> het alarm af, na een halve na <b>1,5 uur</b>, na een kwart na <b>1 uur</b>: <b>INKAKKEN IS BIJPAKKEN!</b></li>
-      <li>Het alarm komt alleen als De Michel open staat.</li>
+      <li>Alarm werkt alleen met De Michel open.</li>
+      <li>De Michel krijgt ieders alarm, de rest alleen hun eigen.</li>
       <li>Max bereikt? Dan geen alarm meer.</li>
       <li><b>TOP</b> = wie heeft het meest, <b>LOG</b> = wie nam wat wanneer.</li>
     </ul>
     <h2 class="rh">Wie kan wat</h2>
     <ul class="rl">
-      <li><b>Iedereen:</b> meedoen via link, QR of pincode, eigen naam kiezen, eigen snoepjes toevoegen en tijden aanpassen, alles bekijken.</li>
-      <li>${mb()} <b>De Michel:</b> feestjes aanmaken en afsluiten, vrienden toevoegen en verwijderen, max instellen, pincodes beheren, namen vrijgeven.</li>
+      <li><b>Iedereen:</b> meedoen via de link of QR van De Michel, eigen naam kiezen, eigen snoepjes toevoegen en tijden aanpassen, alles bekijken.</li>
+      <li>${mb()} <b>De Michel:</b> feestjes aanmaken en afsluiten, vrienden toevoegen en verwijderen, max instellen, de uitnodigingslink vernieuwen, namen vrijgeven.</li>
     </ul>
     <h2 class="rh">Installeren</h2>
     <ul class="rl"><li>Open de link in Safari, tik op <b>Deel</b>, kies <b>Zet op beginscherm</b> en open <b>De Michel</b> vanaf je beginscherm.</li></ul>
@@ -740,7 +717,6 @@ function openRules() { pushScreen('rules', 'Terug', rulesBuild()); }
 // ---------- install screen (iOS Safari tab) ----------
 function showInstall() {
   document.body.classList.add('install');
-  const pin = L.normalizeCode(new URLSearchParams(location.search).get('p'));
   $('#install').innerHTML = `<div class="ins-in">
     <h1>Zet De Michel eerst op je beginscherm</h1>
     <ol class="steps">
@@ -748,13 +724,30 @@ function showInstall() {
       <li><span class="n">2</span><span>Kies <b>Zet op beginscherm</b></span></li>
       <li><span class="n">3</span><span>Open <b>De Michel</b> vanaf je beginscherm</span></li>
     </ol>
-    ${pin.length === 4 ? `<div class="h3" style="margin-top:26px">Werkt het niet? Voer deze code in de app in</div><div class="code">${esc(pin)}</div>` : ''}
   </div>`;
   dataReady();
 }
 
 // ---------- actions ----------
 document.addEventListener('submit', async e => {
+  if (e.target.id === 'renamef') {
+    e.preventDefault();
+    const fid = e.target.dataset.fid, input = $('#rn-nm'), name = input.value.trim(), p = P();
+    if (!name) { shake(input); toast('Vul een naam in'); return input.focus(); }
+    if (p && L.nameTaken(p.friends, name, fid)) { shake(input); return toast('Die naam bestaat al'); }
+    closeSheet();
+    try { await quick(store.renameFriend(current, fid, name)); } catch (err) { toast(err && err.code === 'taken' ? 'Die naam bestaat al' : failMsg(err)); }
+    return;
+  }
+  if (e.target.id === 'addme') {
+    e.preventDefault();
+    const input = $('#me-nm'), name = input.value.trim(), p = P();
+    if (!name) { shake(input); toast('Vul een naam in'); return input.focus(); }
+    if (p && L.nameTaken(p.friends, name)) { shake(input); return toast('Die naam bestaat al'); }
+    closeSheet();
+    try { await store.addFriendAndClaim(current, name); tab = 'crew'; toast('Welkom!'); } catch (err) { toast(err && err.code === 'taken' ? 'Die naam bestaat al' : failMsg(err)); }
+    return;
+  }
   if (e.target.id !== 'addf') return;
   e.preventDefault();
   const input = $('#nm'), name = input.value.trim(), p = P();
@@ -783,8 +776,6 @@ async function setMax(fid, dir) {
 }
 
 document.addEventListener('click', async e => {
-  const pinBox = e.target.closest('.pin i');
-  if (pinBox) { const i = $('input', pinBox.parentNode); if (i) i.focus(); return; }
   const el = e.target.closest('[data-a],[data-tab],[data-f],[data-did],#bd');
   if (!el) return;
   const d = el.dataset;
@@ -806,16 +797,15 @@ document.addEventListener('click', async e => {
     case 'parties': return openParties();
     case 'switch': current = d.pid; persistParties(); tab = 'crew'; closeSheet(); $('#scroll').scrollTop = 0; render(); return;
     case 'newparty': return openNewParty();
-    case 'joinparty': return openJoin();
+    case 'pastelink': return pasteLink();
+    case 'pastego': { const tok = L.tokenFromLink(($('#paste-in') || {}).value); if (!tok) return toast('Dat is geen geldige link'); closeSheet(); return joinWithCode(tok); }
     case 'createparty': return createParty();
-    case 'join': return joinState.code.length === 4 ? joinWithCode(joinState.code) : toast('Vul 4 cijfers in');
     case 'plus': return onPlus();
     case 'share': if (p) pushScreen('delen', 'Crew', shareBuild, { live: true }); return;
-    case 'qrpick': qrIndex = +d.i; { const s = screens.find(x => x.key === 'delen'); if (s) renderScreen(s); } return;
     case 'qrfull': return openQrFull();
     case 'doshare': {
       if (!p) return;
-      const url = linkFor(p), text = `Doe mee met ${p.name} in De Michel (code ${p.codes[0]})`;
+      const url = linkFor(p), text = `Doe mee met ${p.name} in De Michel`;
       if (nav.share) { try { await nav.share({ title: 'De Michel', text, url }); } catch { /* cancelled */ } return; }
       toast(await copyText(url) ? 'Link gekopieerd' : esc(url));
       return;
@@ -863,6 +853,8 @@ document.addEventListener('click', async e => {
       return;
     }
     case 'claimskip': { if (isAdmin(p)) ls.set('michel_skipclaim_' + p.id, true); else skippedClaim.add(p.id); const s = screens.find(x => x.key === 'claim'); if (s) popScreen(s); return; }
+    case 'rename': return openRename(d.fid);
+    case 'addme': return isAdmin(p) ? openAddMe() : adminOnly();
     case 'whoami': { skippedClaim.delete(p.id); ls.set('michel_skipclaim_' + p.id, false); return openClaim(); }
     case 'notme': {
       if (p.closed) return toast('Dit feestje is afgesloten');
@@ -880,26 +872,35 @@ document.addEventListener('click', async e => {
     case 'sound': settings.sound = !settings.sound; saveSettings(); el.classList.toggle('on', settings.sound); if (settings.sound) previewSound(); return;
     case 'calm': settings.calm = !settings.calm; saveSettings(); el.classList.toggle('on', settings.calm); return;
     case 'allalarms': if (!isAdmin(p)) return adminOnly(); settings.allAlarms = !settings.allAlarms; saveSettings(); el.classList.toggle('on', settings.allAlarms); return;
-    case 'addcode': return openExtraCode();
-    case 'saveextra': {
-      const v = pinValue('extra');
-      if (v.length !== 4) return toast('Vul 4 cijfers in');
-      try { await store.addCode(current, v); closeSheet(); toast('Code toegevoegd'); } catch (err) { toast(err && err.code === 'taken' ? 'Code is al bezet' : failMsg(err)); }
-      return;
-    }
-    case 'delcode': {
+    case 'newlink': {
       if (!isAdmin(p)) return adminOnly();
       if (p.closed) return toast('Dit feestje is afgesloten');
-      const code = d.code;
-      confirmSheet({ title: `Code ${code} wissen?`, text: 'Daarmee kan niemand meer meedoen. Wie al in het feestje zit, blijft erin.', ok: 'Wissen', onOk: async () => {
-        try { await store.deleteCode(current, code); toast('Code gewist'); } catch (err) { fail(err); } } });
+      const pid = current, old = p.codes.slice();
+      confirmSheet({ title: 'Nieuwe link maken?', text: 'De oude link en QR werken daarna niet meer. Wie al in het feestje zit, blijft erin. Deel daarna de nieuwe link of QR.', ok: 'Nieuwe link maken', onOk: async () => {
+        try {
+          for (let i = 0; ; i++) { try { await store.addCode(pid, L.newToken()); break; } catch (e) { if (!(e && e.code === 'taken') || i > 2) throw e; } }
+          for (const c of old) await store.deleteCode(pid, c);
+          toast('Nieuwe link gemaakt. Deel de nieuwe QR.');
+        } catch (err) { fail(err); } } });
       return;
     }
     case 'closeparty': {
       if (!isAdmin(p)) return adminOnly();
       if (p.closed) return;
-      confirmSheet({ title: 'Feestje afsluiten?', text: 'Daarna is het alleen-lezen voor iedereen: geen alarm en geen nieuwe snoepjes. Dit kan niet ongedaan worden.', ok: 'Afsluiten', onOk: async () => {
-        try { await store.closeParty(current); toast('Feestje afgesloten'); } catch (err) { fail(err); } } });
+      sheet(`<div class="sh-name">Feestje afsluiten?</div><div class="sh-sub">Daarna is het alleen-lezen voor iedereen: geen alarm en geen nieuwe snoepjes. Dit kan niet ongedaan worden. Link ook uitschakelen? Dan kan niemand het feestje nog openen met de oude link of QR.</div>
+        <button class="big danger" data-a="closeall" style="margin-top:6px">Afsluiten en link uitschakelen</button>
+        <button class="big ghost" data-a="closeonly" style="height:66px;font-size:24px">Alleen afsluiten</button>
+        <button class="big ghost" data-a="close" style="height:66px;font-size:24px">Annuleren</button>`, { codes: p.codes.slice() });
+      return;
+    }
+    case 'closeall': case 'closeonly': {
+      const codes = d.a === 'closeall' && sheetCtx ? sheetCtx.codes : [], pid = current;
+      closeSheet();
+      try {
+        await store.closeParty(pid);
+        for (const c of codes) await store.deleteCode(pid, c);
+        toast(codes.length ? 'Feestje afgesloten, link uitgeschakeld' : 'Feestje afgesloten');
+      } catch (err) { fail(err); }
       return;
     }
     case 'leave':
@@ -927,7 +928,7 @@ function checkAlarms(now) {
   if (alarm.target) return;
   const seen = seenMap(), snooze = snoozeMap();
   for (const pp of parties) {
-    if (!live.has(pp.id)) continue; // never alarm from a stale cache on cold start
+    if (!L.alarmGate({ live: live.has(pp.id), hasCache: raw.has(pp.id), online, uptimeMs: performance.now() })) continue; // stale cache only when offline / no snapshot after 5 s
     const p = view(pp.id); if (!p) continue;
     for (const f of alarmFriends(p)) {
       const st = L.status(dosesOf(p, f.id), f.max, now), key = p.id + ':' + f.id;
@@ -950,8 +951,8 @@ function showAlarm(a) {
   fillAlarm();
   $('#alarm').classList.toggle('calm', settings.calm);
   $('#alarm').classList.add('on');
-  startMusic(!settings.calm);
-  if (nav.vibrate) { try { nav.vibrate([500, 200, 500]); } catch { /* needs a gesture */ } }
+  startMusic(!settings.calm && !reducedMotion());
+  if (nav.vibrate && nav.userActivation && nav.userActivation.hasBeenActive) { try { nav.vibrate([500, 200, 500]); } catch { /* unsupported */ } }
 }
 function fillAlarm() {
   const i = alarmInfo();
@@ -985,7 +986,9 @@ const arpNote = (step, sub = 0) => {
   return i === 3 ? c[0] * 2 : c[i];
 };
 let ac = null, bus = null, fxSend = null, killG = null, lfoG = null;
-const music = { on: false, timer: null, next: 0, step: 0, lfo: null, flips: [], beat: false };
+const music = { on: false, timer: null, next: 0, step: 0, lfo: null, beat: false, gen: 0, stopT: null };
+const MUSIC_MAX_MS = 3 * 60 * 1000; // after 3 minutes only the visual alarm stays
+const reducedMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 
 function unlockAudio() {
   try { if (nav.audioSession) nav.audioSession.type = 'playback'; } catch { /* unsupported */ } // plays with the silent switch on (iOS 16.4+)
@@ -1058,7 +1061,7 @@ function schedStep(step, t) {
   if (double) voiceLead(arpNote(step + 1), t + sx / 2, sx * 0.42, cutoff);
   if (step % 16 === 0) voicePad(CHORDS[Math.floor(step / 16) % 4].map(f => f / 2), t, sx * 16);
   if (Math.random() < 0.3) voiceBleep(t + (Math.random() < 0.5 ? 0 : sx / 2));
-  if (step % 4 === 0 && music.beat) music.flips.push(setTimeout(() => $('#alarm').classList.toggle('flip'), Math.max(0, (t - ac.currentTime) * 1000)));
+  if (step % 4 === 0 && music.beat) { const g = music.gen; setTimeout(() => { if (music.on && g === music.gen) $('#alarm').classList.toggle('flip'); }, Math.max(0, (t - ac.currentTime) * 1000)); }
 }
 function pump() {
   while (music.on && music.next < ac.currentTime + 0.1) { // 100 ms lookahead, pumped every 25 ms
@@ -1072,7 +1075,8 @@ function startMusic(beat) {
   if (!ac || !bus || !settings.sound || music.on) return;
   if (ac.state !== 'running') ac.resume().catch(() => {});
   const t = ac.currentTime;
-  music.on = true; music.step = 0; music.next = t + 0.06; music.beat = !!beat;
+  music.on = true; music.step = 0; music.next = t + 0.06; music.beat = !!beat; music.gen++;
+  clearTimeout(music.stopT); music.stopT = setTimeout(stopMusic, MUSIC_MAX_MS);
   killG.gain.cancelScheduledValues(0); killG.gain.setValueAtTime(0, t); killG.gain.linearRampToValueAtTime(1, t + 0.05); // 50 ms ramp-in
   music.lfo = ac.createOscillator(); music.lfo.frequency.value = 5.5; music.lfo.connect(lfoG); music.lfo.start(t);
   music.timer = setInterval(pump, 25);
@@ -1080,8 +1084,7 @@ function startMusic(beat) {
   pump();
 }
 function stopMusic() {
-  clearInterval(music.timer);
-  music.flips.forEach(clearTimeout); music.flips = [];
+  clearInterval(music.timer); clearTimeout(music.stopT); music.gen++;
   $('#alarm').classList.remove('beat', 'flip');
   if (!music.on) return;
   music.on = false;
@@ -1131,12 +1134,20 @@ else {
   replayOutbox();
 
   // link ?p=PIN joins that party directly (first standalone launch included), then the PIN leaves the URL
-  const linkCode = L.normalizeCode(new URLSearchParams(location.search).get('p'));
+  // each ?p=PIN is auto-joined only once per phone; later launches with the same start URL just open normally
+  const linkCode = L.normalizeCode(new URLSearchParams(location.search).get('p')), linkOk = L.isValidCode(linkCode);
   if (linkCode) {
     const u = new URL(location.href); u.searchParams.delete('p');
     history.replaceState(null, '', u);
-    const known = parties.length;
-    joinWithCode(linkCode, true).then(ok => { if (!ok && !known) dataReady(); });
+    const done = ls.get('michel_linkcodes_done', []);
+    if (!linkOk) toast('Deze link werkt niet (meer)');
+    else if (!done.includes(linkCode)) {
+      const known = parties.length;
+      joinWithCode(linkCode, true).then(ok => {
+        if (ok) ls.set('michel_linkcodes_done', [...ls.get('michel_linkcodes_done', []), linkCode]);
+        else if (!known) dataReady();
+      });
+    }
   }
 
   setInterval(tick, 1000);

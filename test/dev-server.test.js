@@ -34,35 +34,35 @@ async function party(codes = []) {
 }
 
 test('auth required, no listing', async () => {
-  assert.equal((await call(null, 'GET', '/api/codes/8209')).status, 401);
+  assert.equal((await call(null, 'GET', '/api/codes/Tok8209Alpha')).status, 401);
   assert.equal((await call('admin-1', 'GET', '/api/parties')).status, 404);
   assert.equal((await call('admin-1', 'GET', '/api/codes')).status, 404);
   assert.equal((await call('admin-1', 'GET', '/api/nope')).status, 404);
   assert.equal((await call('admin-1', 'GET', '/api/parties/missing-party-1')).status, 404);
 });
 
-test('codes are aliases for one party (two PINs, same party)', async () => {
-  const id = await party(['8209', '7815']);
-  const a = await call('bob-0001', 'GET', '/api/codes/8209');
-  const b = await call('bob-0001', 'GET', '/api/codes/7815');
+test('codes are aliases for one party (two join tokens, same party)', async () => {
+  const id = await party(['Tok8209Alpha', 'Tok7815Alpha']);
+  const a = await call('bob-0001', 'GET', '/api/codes/Tok8209Alpha');
+  const b = await call('bob-0001', 'GET', '/api/codes/Tok7815Alpha');
   assert.deepEqual(a.body, { partyId: id });
   assert.deepEqual(b.body, { partyId: id });
-  assert.equal((await call('bob-0001', 'GET', '/api/codes/0000')).status, 404);
-  assert.equal((await call('bob-0001', 'GET', '/api/codes/8209x')).status, 404);
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/Tok0000Alpha')).status, 404);
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/Tok8209Alph')).status, 404); // no prefix matching: tokens must be exact
   const p = await call('bob-0001', 'GET', '/api/parties/' + id);
-  assert.deepEqual(Object.keys(p.body.codes), ['7815', '8209']);
+  assert.deepEqual(Object.keys(p.body.codes).sort(), ['Tok7815Alpha', 'Tok8209Alpha']);
 });
 
 test('a taken PIN is rejected; non-admin cannot add a PIN', async () => {
-  const id = await party(['4321']);
-  const dup = await call('admin-2', 'POST', '/api/parties', { id: 'party-dev-dup1', name: 'X', createdAt: NOW, codes: ['4321'] });
+  const id = await party(['Tok4321Alpha']);
+  const dup = await call('admin-2', 'POST', '/api/parties', { id: 'party-dev-dup1', name: 'X', createdAt: NOW, codes: ['Tok4321Alpha'] });
   assert.equal(dup.status, 409);
   assert.equal((await call('admin-1', 'GET', '/api/parties/party-dev-dup1')).status, 404); // nothing half-created
-  assert.equal((await call('admin-1', 'POST', `/api/parties/${id}/codes`, { code: '4321', createdAt: NOW })).status, 409);
-  assert.equal((await call('mallory-1', 'POST', `/api/parties/${id}/codes`, { code: '1357', createdAt: NOW })).status, 403);
-  assert.equal((await call('admin-1', 'GET', '/api/codes/1357')).status, 404);
-  assert.equal((await call('admin-1', 'POST', `/api/parties/${id}/codes`, { code: '1357', createdAt: NOW })).status, 201);
-  assert.equal((await call('admin-1', 'GET', '/api/codes/1357')).body.partyId, id);
+  assert.equal((await call('admin-1', 'POST', `/api/parties/${id}/codes`, { code: 'Tok4321Alpha', createdAt: NOW })).status, 409);
+  assert.equal((await call('mallory-1', 'POST', `/api/parties/${id}/codes`, { code: 'Tok1357Alpha', createdAt: NOW })).status, 403);
+  assert.equal((await call('admin-1', 'GET', '/api/codes/Tok1357Alpha')).status, 404);
+  assert.equal((await call('admin-1', 'POST', `/api/parties/${id}/codes`, { code: 'Tok1357Alpha', createdAt: NOW })).status, 201);
+  assert.equal((await call('admin-1', 'GET', '/api/codes/Tok1357Alpha')).body.partyId, id);
   assert.equal((await call('admin-1', 'POST', `/api/parties/${id}/codes`, { code: 'AB12', createdAt: NOW })).status, 400);
   assert.equal((await call('admin-1', 'POST', `/api/parties/${id}/codes`, { code: '12345', createdAt: NOW })).status, 400);
 });
@@ -74,7 +74,7 @@ test('digits only: codes with letters are rejected at creation', async () => {
 
 test('party creation validation', async () => {
   const ok = { id: 'party-dev-val1', name: 'N', createdAt: NOW };
-  for (const patch of [{ id: 'bad id' }, { name: '' }, { name: 'x'.repeat(31) }, { createdAt: 'now' }, { createdAt: NOW + 6 * 60000 }, { extra: 1 }, { codes: 'x' }, { codes: ['1111', '1111'] }]) {
+  for (const patch of [{ id: 'bad id' }, { name: '' }, { name: 'x'.repeat(31) }, { createdAt: 'now' }, { createdAt: NOW + 6 * 60000 }, { extra: 1 }, { codes: 'x' }, { codes: ['Tok1111Alpha', 'Tok1111Alpha'] }]) {
     assert.equal((await call('admin-1', 'POST', '/api/parties', { ...ok, ...patch })).status, 400, JSON.stringify(patch));
   }
   assert.equal((await call('admin-1', 'POST', '/api/parties', { ...ok, name: 'x'.repeat(30) })).status, 201);
@@ -160,7 +160,7 @@ test('doses: validation, anyone-with-claim, cascade on friend delete', async () 
 });
 
 test('closed party is read-only for everyone', async () => {
-  const id = await party(['2468']);
+  const id = await party(['Tok2468Alpha']);
   const b = `/api/parties/${id}`;
   const fid = (await call('admin-1', 'POST', b + '/friends', { name: 'A', createdAt: NOW })).body.id;
   const did = (await call('admin-1', 'POST', b + '/doses', { friendId: fid, size: 1, t: NOW, addedAt: NOW })).body.id;
@@ -174,13 +174,13 @@ test('closed party is read-only for everyone', async () => {
     ['admin-1', 'POST', '/doses', { friendId: fid, size: 1, t: NOW, addedAt: NOW }],
     ['admin-1', 'PATCH', `/doses/${did}`, { t: 1 }],
     ['admin-1', 'DELETE', `/doses/${did}`],
-    ['admin-1', 'POST', '/codes', { code: '9999', createdAt: NOW }],
+    ['admin-1', 'POST', '/codes', { code: 'Tok9999Alpha', createdAt: NOW }],
     ['bob-0001', 'POST', '/claims', { friendId: fid }],
   ]) assert.equal((await call(who, m, b + u, body)).status, 403, `${who} ${m} ${u}`);
   const p = await call('bob-0001', 'GET', b);
   assert.equal(p.status, 200);
   assert.equal(p.body.closedAt, NOW);
-  assert.equal((await call('bob-0001', 'GET', '/api/codes/2468')).body.partyId, id); // still resolvable
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/Tok2468Alpha')).body.partyId, id); // still resolvable
 });
 
 function readSse(url, uid) {
@@ -205,7 +205,7 @@ function readSse(url, uid) {
 }
 
 test('SSE: snapshot on connect and an update after a write', async () => {
-  const id = await party(['1212']);
+  const id = await party(['Tok1212Alpha']);
   await sec('watcher-01');
   const s = readSse(`${base}/api/parties/${id}/events`, 'watcher-01');
   const first = await s.next(1);
@@ -244,10 +244,10 @@ test('persistence and seed', async () => {
   const s1 = await startServer({ port: 0, persistFile: file, seed: true, now: () => NOW });
   const b1 = `http://localhost:${s1.port}`;
   const h = { 'x-uid': 'dev-admin', 'x-secret': 'dev-admin-secret', 'content-type': 'application/json' };
-  const code = await (await fetch(b1 + '/api/codes/8209', { headers: h })).json();
-  const seedId = code.partyId;
+  const seedId = s1.seed.partyId, seedCode = s1.seed.code; // tests resolve the generated token from the seed result
   assert.match(seedId, /^p[0-9a-f]{16}$/); // random, not guessable
-  assert.equal((await (await fetch(b1 + '/api/codes/7815', { headers: h })).json()).partyId, seedId);
+  assert.match(seedCode, /^[A-Za-z0-9]{12}$/);
+  assert.equal((await (await fetch(b1 + '/api/codes/' + seedCode, { headers: h })).json()).partyId, seedId);
   const p = await (await fetch(b1 + '/api/parties/' + seedId, { headers: h })).json();
   assert.equal(p.name, 'AWAKENINGS ADE 2026');
   assert.equal(p.admin, 'dev-admin');
@@ -258,6 +258,7 @@ test('persistence and seed', async () => {
   const s2 = await startServer({ port: 0, persistFile: file, seed: true, now: () => NOW });
   const r = await fetch(`http://localhost:${s2.port}/api/parties/persisted-one`, { headers: h });
   assert.equal(r.status, 200);
+  assert.deepEqual(s2.seed, s1.seed); // the seed survives a restart with the same token
   await s2.close();
   fs.writeFileSync(file, '{broken');
   const s3 = await startServer({ port: 0, persistFile: file, now: () => NOW });
@@ -271,7 +272,7 @@ test('sessions: secret per uid, no hijacking, wrong secret rejected', async () =
   assert.ok(a.secret.length >= 16);
   assert.equal((await fetch(base + '/api/session', { method: 'POST', body: JSON.stringify({ uid: a.uid }) })).status, 409); // cannot take over
   assert.equal((await fetch(base + '/api/session', { method: 'POST', body: JSON.stringify({ uid: 'a b' }) })).status, 400);
-  const get = h => fetch(base + '/api/codes/0000', { headers: h }).then(r => r.status);
+  const get = h => fetch(base + '/api/codes/Tok0000Alpha', { headers: h }).then(r => r.status);
   assert.equal(await get({ 'x-uid': a.uid, 'x-secret': a.secret }), 404); // authenticated (code unknown)
   assert.equal(await get({ 'x-uid': a.uid }), 401); // no secret
   assert.equal(await get({ 'x-uid': a.uid, 'x-secret': 'wrong' }), 401);
@@ -286,25 +287,27 @@ test('only allow-listed creators can create parties', async () => {
   const b = `http://localhost:${s.port}`;
   const session = async uid => (await (await fetch(b + '/api/session', { method: 'POST', body: JSON.stringify({ uid }) })).json()).secret;
   const create = async (uid, secret, id, codes) => (await fetch(b + '/api/parties', { method: 'POST', headers: { 'x-uid': uid, 'x-secret': secret }, body: JSON.stringify({ id, name: 'N', codes }) })).status;
-  assert.equal(await create('stranger-1', await session('stranger-1'), 'party-allow-1', ['1111']), 403);
-  assert.equal(await create('allowed-1', await session('allowed-1'), 'party-allow-1', ['1111']), 201);
-  assert.equal(await create('dev-admin', 'dev-admin-secret', 'party-allow-2', ['2222']), 201); // seed adds dev-admin
+  assert.equal(await create('stranger-1', await session('stranger-1'), 'party-allow-1', ['Tok1111Alpha']), 403);
+  assert.equal(await create('allowed-1', await session('allowed-1'), 'party-allow-1', ['Tok1111Alpha']), 201);
+  assert.equal(await create('dev-admin', 'dev-admin-secret', 'party-allow-2', ['Tok2222Alpha']), 201); // seed adds dev-admin
   assert.equal(Object.keys(s.db().parties).length, 3); // seed party + 2
   await s.close();
 });
 
 test('admin can delete a code; others cannot; the code stops resolving', async () => {
-  const id = await party(['3131', '3232']);
+  const id = await party(['Tok3131Alpha', 'Tok3232Alpha']);
   const url = c => `/api/parties/${id}/codes/${c}`;
-  assert.equal((await call('mallory-1', 'DELETE', url('3131'))).status, 403);
-  assert.equal((await call('admin-1', 'DELETE', url('9999'))).status, 404);
-  assert.equal((await call('admin-1', 'DELETE', url('3131'))).status, 200);
-  assert.equal((await call('bob-0001', 'GET', '/api/codes/3131')).status, 404);
-  assert.equal((await call('bob-0001', 'GET', '/api/codes/3232')).body.partyId, id);
-  assert.deepEqual(Object.keys((await call('bob-0001', 'GET', '/api/parties/' + id)).body.codes), ['3232']);
-  assert.equal((await call('admin-1', 'POST', `/api/parties/${id}/codes`, { code: '3131', createdAt: NOW })).status, 201); // free again
+  assert.equal((await call('mallory-1', 'DELETE', url('Tok3131Alpha'))).status, 403);
+  assert.equal((await call('admin-1', 'DELETE', url('Tok9999Alpha'))).status, 404);
+  assert.equal((await call('admin-1', 'DELETE', url('Tok3131Alpha'))).status, 200);
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/Tok3131Alpha')).status, 404);
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/Tok3232Alpha')).body.partyId, id);
+  assert.deepEqual(Object.keys((await call('bob-0001', 'GET', '/api/parties/' + id)).body.codes), ['Tok3232Alpha']);
+  assert.equal((await call('admin-1', 'POST', `/api/parties/${id}/codes`, { code: 'Tok3131Alpha', createdAt: NOW })).status, 201); // free again
   await call('admin-1', 'POST', `/api/parties/${id}/close`);
-  assert.equal((await call('admin-1', 'DELETE', url('3232'))).status, 403); // closed = read-only
+  assert.equal((await call('mallory-1', 'DELETE', url('Tok3232Alpha'))).status, 403);
+  assert.equal((await call('admin-1', 'DELETE', url('Tok3232Alpha'))).status, 200); // the admin may wipe codes after closing, even the last one
+  assert.equal((await call('bob-0001', 'GET', '/api/codes/Tok3232Alpha')).status, 404);
 });
 
 test('adversarial ids and keys are rejected (stored XSS)', async () => {
@@ -355,4 +358,58 @@ test('friend names are unique per party (case-insensitive, trimmed)', async () =
   assert.equal((await call('admin-1', 'PATCH', `${f}/${a.body.id}`, { name: 'SANNE' })).status, 200); // own name is fine
   const other = await party();
   assert.equal((await call('admin-1', 'POST', `/api/parties/${other}/friends`, { name: 'Sanne', createdAt: NOW })).status, 201); // other party
+});
+
+test('binds to 127.0.0.1 by default (not the whole LAN)', () => {
+  assert.equal(srv.server.address().address, '127.0.0.1');
+});
+
+test('the first code is the main code: stored order wins, no timestamp tie-break', async () => {
+  const id = await party(['Tok4111Alpha', 'Tok4222Alpha']);
+  const p = (await call('bob-0001', 'GET', '/api/parties/' + id)).body;
+  assert.deepEqual(p.codes, { Tok4111Alpha: 0, Tok4222Alpha: 1 });
+  assert.equal((await call('admin-1', 'POST', `/api/parties/${id}/codes`, { code: 'Tok6001Alpha' })).status, 201);
+  const q = (await call('bob-0001', 'GET', '/api/parties/' + id)).body.codes;
+  assert.ok(q['Tok6001Alpha'] > q['Tok4222Alpha']); // later codes sort after
+});
+
+test('dose POST: a missing or invalid friendId is a 400 before the permission check', async () => {
+  const id = await party();
+  for (const body of [{ size: 1, t: NOW }, { friendId: 'nope', size: 1, t: NOW }, { friendId: 5, size: 1, t: NOW }]) {
+    assert.equal((await call('mallory-1', 'POST', `/api/parties/${id}/doses`, body)).status, 400, JSON.stringify(body));
+  }
+});
+
+test('admin adds their own name and claims it atomically; others cannot', async () => {
+  const id = await party();
+  const f = `/api/parties/${id}/friends`;
+  assert.equal((await call('mallory-1', 'POST', f, { name: 'Hack', claim: true })).status, 403);
+  const r = await call('admin-1', 'POST', f, { name: 'Michel', claim: true });
+  assert.equal(r.status, 201);
+  const p = (await call('admin-1', 'GET', '/api/parties/' + id)).body;
+  assert.equal(p.claims[r.body.id], 'admin-1');
+  assert.equal(p.members['admin-1'], r.body.id);
+  const again = await call('admin-1', 'POST', f, { name: 'Twee', claim: true });
+  assert.equal(again.status, 403); // already claimed: nothing is created
+  assert.equal(Object.keys((await call('admin-1', 'GET', '/api/parties/' + id)).body.friends).length, 1);
+  assert.equal((await call('admin-1', 'POST', f, { name: 'Zonder' })).status, 201); // a plain add still works
+  assert.equal((await call('admin-1', 'POST', f, { name: 'Bad', claim: 'yes' })).status, 201); // only literal true claims
+});
+
+test('renaming keeps claims and doses linked (the friend id does not change); admin only; same validation', async () => {
+  const id = await party();
+  const b = `/api/parties/${id}`;
+  const a = await call('admin-1', 'POST', b + '/friends', { name: 'Sanne', createdAt: NOW });
+  await call('admin-1', 'POST', b + '/friends', { name: 'Joris', createdAt: NOW });
+  await call('alice-01', 'POST', b + '/claims', { friendId: a.body.id });
+  await call('alice-01', 'POST', b + '/doses', { friendId: a.body.id, size: 1, t: NOW });
+  assert.equal((await call('alice-01', 'PATCH', `${b}/friends/${a.body.id}`, { name: 'Mine' })).status, 403); // not even the claim owner
+  assert.equal((await call('admin-1', 'PATCH', `${b}/friends/${a.body.id}`, { name: ' Sanne-Lisa ' })).status, 200);
+  const p = (await call('admin-1', 'GET', b)).body;
+  assert.equal(p.friends[a.body.id].name, ' Sanne-Lisa '.slice(0, 14)); // stored as sent; the UI trims before sending
+  assert.equal(p.claims[a.body.id], 'alice-01');
+  assert.equal(Object.values(p.doses).filter(d => d.friendId === a.body.id).length, 1);
+  assert.equal((await call('admin-1', 'PATCH', `${b}/friends/${a.body.id}`, { name: 'JORIS' })).status, 409); // duplicate, case-insensitive
+  assert.equal((await call('admin-1', 'PATCH', `${b}/friends/${a.body.id}`, { name: '' })).status, 400);
+  assert.equal((await call('admin-1', 'PATCH', `${b}/friends/${a.body.id}`, { name: 'x'.repeat(15) })).status, 400);
 });
