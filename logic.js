@@ -221,17 +221,24 @@ export function planSchedule({ doses = [], max, size, start, cutoff, now }) {
 const total_ = ds => ds.reduce((a, d) => a + d.size, 0);
 
 /** "HH:MM" entry/end + hours before the end -> {start, end, cutoff} as timestamps (end may lie after midnight); null when invalid. */
-export function planWindow({ entry, end, beforeH = 2, now }) {
+export function planWindow({ entry, end, beforeH = 2, now, firstDose = null }) {
   const parse = s => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s ?? '').trim()); return m && +m[1] < 24 && +m[2] < 60 ? [+m[1], +m[2]] : null; };
   const e = parse(entry), n = parse(end);
   if (!e || !n) return null;
   const at = (hm, ref, plusDays = 0) => { const d = new Date(ref); d.setDate(d.getDate() + plusDays); d.setHours(hm[0], hm[1], 0, 0); return d.getTime(); };
-  let start = at(e, now);
-  if (start > now + 12 * 3600000) start = at(e, now, -1); // an entry far ahead means last evening
-  else if (start < now - 12 * 3600000) start = at(e, now, 1);
+  const latestOnOrBefore = (hm, ref) => { const t = at(hm, ref); return t > ref ? at(hm, ref, -1) : t; }; // latest occurrence of HH:MM that is <= ref
+  // start: with own doses the entry occurrence on/before the first dose (closest to it); otherwise the latest one <= now + 3 h
+  let start = latestOnOrBefore(e, firstDose ?? now + 3 * 3600000);
   let endT = at(n, start);
-  if (endT <= start) endT = at(n, start, 1); // across midnight
-  return { start, end: endT, cutoff: endT - beforeH * 3600000 };
+  if (endT <= start) endT = at(n, start, 1); // the first end occurrence after the start (across midnight)
+  if (firstDose == null && endT <= now) { // no doses yet and that party is over: the upcoming window
+    start = at(e, start, 1);
+    endT = at(n, start);
+    if (endT <= start) endT = at(n, start, 1);
+  }
+  const cutoff = endT - beforeH * 3600000;
+  if (endT - start > 24 * 3600000 || cutoff < start) return null; // not a sane window
+  return { start, end: endT, cutoff };
 }
 
 // Crew order: due (longest overdue first), then wait (least time left first), then none (A-Z), then max (A-Z). a/b = {name, st} with st = status().

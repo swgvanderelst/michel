@@ -442,3 +442,45 @@ test('compareCrew: due (longest overdue first), wait (least left first), none A-
   assert.deepEqual([mk('B', { kind: 'wait', rem: 5 }), mk('A', { kind: 'wait', rem: 5 })].sort(L.compareCrew).map(x => x.name), ['A', 'B']);
   assert.equal(L.compareCrew(mk('A', { kind: 'none' }), mk('A', { kind: 'none' })), 0);
 });
+
+test('planWindow: an afternoon party planned in the night, on a normal night and on the DST night (Europe/Amsterdam)', () => {
+  const tz = process.env.TZ; process.env.TZ = 'Europe/Amsterdam';
+  try {
+    // 13:00 -> 07:00 planned at 01:30 on Oct 31: the party began yesterday afternoon and ends this morning
+    const now = new Date(2026, 9, 31, 1, 30).getTime();
+    const w = L.planWindow({ entry: '13:00', end: '07:00', beforeH: 2, now });
+    assert.equal(w.start, new Date(2026, 9, 30, 13, 0).getTime());
+    assert.equal(w.end, new Date(2026, 9, 31, 7, 0).getTime());
+    assert.equal(w.cutoff, new Date(2026, 9, 31, 5, 0).getTime());
+    const r = L.planSchedule({ doses: [], max: 9, size: 0.5, start: w.start, cutoff: w.cutoff, now });
+    assert.ok(r.length && r.every(x => x.t <= w.cutoff), 'no moments after the cutoff'); // the old rule suggested 06:00-10:30 here
+    // the DST night: Oct 25 has 25 hours, 01:30 happens twice; end 07:00 is CET
+    const dst = new Date(2026, 9, 25, 1, 30).getTime();
+    const wd = L.planWindow({ entry: '13:00', end: '07:00', beforeH: 2, now: dst });
+    assert.equal(wd.start, new Date(2026, 9, 24, 13, 0).getTime());
+    assert.equal(wd.end, new Date(2026, 9, 25, 7, 0).getTime());
+    assert.equal(wd.cutoff, wd.end - 2 * 3600000); // 2 h before the end in elapsed time
+    assert.ok(wd.end - wd.start <= 24 * 3600000 && wd.cutoff >= wd.start);
+    const rd = L.planSchedule({ doses: [], max: 9, size: 0.5, start: wd.start, cutoff: wd.cutoff, now: dst });
+    assert.ok(rd.every(x => x.t <= wd.cutoff));
+  } finally { if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz; }
+});
+
+test('planWindow: planning in the morning for a 22:00 entry gives the upcoming window; own doses fix the start; guards', () => {
+  const morning = new Date(2026, 8, 10, 9, 0).getTime();
+  const w = L.planWindow({ entry: '22:00', end: '04:00', beforeH: 2, now: morning });
+  assert.equal(w.start, new Date(2026, 8, 10, 22, 0).getTime()); // tonight, not last night
+  assert.equal(w.cutoff, new Date(2026, 8, 11, 2, 0).getTime());
+  const r = L.planSchedule({ doses: [], max: 2, size: 0.5, start: w.start, cutoff: w.cutoff, now: morning });
+  assert.ok(r.length > 0 && r[0].t === w.start, 'a plan, not "laatste moment voorbij"');
+  // with own doses the start is the entry occurrence on/before the FIRST dose, whatever time it is now
+  const first = new Date(2026, 8, 10, 14, 0).getTime();
+  const wd = L.planWindow({ entry: '13:00', end: '07:00', beforeH: 2, now: new Date(2026, 8, 11, 6, 30).getTime(), firstDose: first });
+  assert.equal(wd.start, new Date(2026, 8, 10, 13, 0).getTime());
+  assert.equal(wd.end, new Date(2026, 8, 11, 7, 0).getTime());
+  // a party that is over and has doses stays over (nothing is shifted to tomorrow)
+  const over = L.planWindow({ entry: '13:00', end: '07:00', beforeH: 2, now: new Date(2026, 8, 11, 12, 0).getTime(), firstDose: first });
+  assert.equal(over.end, new Date(2026, 8, 11, 7, 0).getTime());
+  // guard: the cutoff may not lie before the start
+  assert.equal(L.planWindow({ entry: '10:00', end: '11:00', beforeH: 3, now: new Date(2026, 8, 10, 10, 30).getTime() }), null);
+});

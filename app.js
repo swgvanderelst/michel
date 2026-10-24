@@ -325,16 +325,19 @@ function cardHtml(f, p, now) {
 // ---------- personal plan: stored on this phone only (michel_plan_<pid>), recomputed from the real doses ----------
 const planKey = pid => 'michel_plan_' + pid;
 const planDefaults = (p, f) => { const mine = L.sortDosesDesc(dosesOf(p, f.id)); const first = mine.length ? mine[mine.length - 1].t : nowMs(); return { entry: hhmm(first), end: '', before: 2, size: 0.5, max: null }; };
-const getPlan = (p, f) => ({ ...planDefaults(p, f), ...ls.get(planKey(p.id), {}) });
+const BEFORE_OPTS = [1, 1.5, 2, 3];
+const getPlan = (p, f) => { const pl = { ...planDefaults(p, f), ...ls.get(planKey(p.id), {}) }; if (!BEFORE_OPTS.includes(+pl.before)) pl.before = 2; return pl; }; // a stored odd value falls back to 2 h
 function planFor(p, f) { // {plan, max, rows, win} or a reason it cannot be computed
   const plan = getPlan(p, f), max = f.max != null ? f.max : plan.max;
   if (max == null) return { plan, max, reason: 'max' };
-  const win = L.planWindow({ entry: plan.entry, end: plan.end, beforeH: plan.before, now: nowMs() });
+  const own = dosesOf(p, f.id), first = own.length ? Math.min(...own.map(d => d.t)) : null;
+  const win = L.planWindow({ entry: plan.entry, end: plan.end, beforeH: plan.before, now: nowMs(), firstDose: first });
   if (!win) return { plan, max, reason: 'end' };
   const rows = L.planSchedule({ doses: dosesOf(p, f.id), max, size: plan.size, start: win.start, cutoff: win.cutoff, now: nowMs() });
   return { plan, max, win, rows };
 }
 function planLine(p, f) {
+  if (p.closed) return ''; // no plan line on a closed party
   const r = planFor(p, f);
   return r.rows && r.rows.length ? `<div class="meta planline">Volgens plan: <b>± ${hhmm(r.rows[0].t)}</b></div>` : '';
 }
@@ -350,7 +353,7 @@ function planBuild(fid) {
     if (r.reason === 'max') result = '<p class="lead">Stel eerst je max in.</p>';
     else if (r.reason === 'end') result = '<p class="lead">Vul het einde van het feestje in.</p>';
     else if (!r.rows.length) result = `<p class="lead">Geen momenten gepland: je max is bereikt of het laatste moment (${hhmm(r.win.cutoff)}) is voorbij.</p>`;
-    else result = `<ul class="plan-list">${r.rows.map((x, i) => `<li class="plan-row ${i === 0 ? 'next' : ''}"><span class="t">± ${hhmm(x.t)}</span><span class="s">${frac(x.size)}</span></li>`).join('')}</ul><p class="note">Plan stopt om ${hhmm(r.win.cutoff)} (laatste moment).</p>`;
+    else result = `<ul class="plan-list">${r.rows.map((x, i) => `${i ? `<li class="plan-gap">+${Math.floor((x.t - r.rows[i - 1].t) / 3600000)}:${String(Math.round((x.t - r.rows[i - 1].t) / 60000) % 60).padStart(2, '0')}</li>` : ''}<li class="plan-row ${i === 0 ? 'next' : ''}"><span class="t">± ${hhmm(x.t)}</span><span class="s">${frac(x.size)}</span></li>`).join('')}</ul><p class="note">Plan stopt om ${hhmm(r.win.cutoff)} (laatste moment).</p>`;
     return `<h1 style="font-size:84px;margin-top:0">Mijn<br>plan</h1>
       <p class="note" style="margin-top:0">Alleen op deze telefoon. Het plan rekent met je echte snoepjes en de wachttijden.</p>
       <div class="h3">Binnenkomst</div><input class="field" type="time" id="pl-entry" value="${esc(pl.entry)}" style="font-size:40px;text-align:center">
