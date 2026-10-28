@@ -2,7 +2,7 @@
 // Everything is cache-first from the generation filled at install (index.html, modules, icons, fonts, pinned SDK), so the HTML and the
 // JS of one launch always belong together. A new release is picked up when the new worker installs a fresh generation; nothing is
 // refreshed into the active one. A first visit (nothing cached) goes to the network and caches successful responses only.
-const VERSION = 'michel-v17';
+const VERSION = 'michel-v18';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'logic.js', 'store.js', 'store-dev.js', 'store-firebase.js', 'firebase-config.js',
   'vendor/qrcode.js', 'manifest.webmanifest', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'assets/splash.jpg'];
 const SDK = 'https://www.gstatic.com/firebasejs/12.0.0/';
@@ -20,7 +20,7 @@ self.addEventListener('install', e => {
 
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
-    for (const k of await caches.keys()) if (k !== VERSION) await caches.delete(k);
+    for (const k of await caches.keys()) if (k !== VERSION && k.startsWith('michel-')) await caches.delete(k); // only our own caches: the origin is shared with other apps
     await self.clients.claim();
   })());
 });
